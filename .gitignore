@@ -1,0 +1,16 @@
+# Terraform local state — never commit
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Real values — never commit. The `.example` files are tracked; only
+# the populated copies are ignored.
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+!*.example
