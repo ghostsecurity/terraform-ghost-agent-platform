@@ -23,9 +23,15 @@ image_tag = "vX.Y.Z"
 # AWS region for the deployment.
 aws_region = "us-east-1"
 
-# CIDR allowed SSH access to the VM. Use an office IP /32 or VPN
-# egress block — avoid 0.0.0.0/0. Find the current public IP with:
+# CIDR allowed SSH (port 22) access to the VM. Use an office IP /32
+# or VPN egress block — avoid 0.0.0.0/0. Find the current public IP
+# with:
 #   curl -4 https://checkip.amazonaws.com
+#
+# Note: this only gates the SSH security-group rule. SSM Session
+# Manager (the default access path) bypasses this entirely. When
+# ssh_key_name is left empty below, no key pair is attached and
+# admin_cidr is effectively a defense-in-depth setting only.
 admin_cidr = "203.0.113.42/32"
 
 # Email for the initial admin user seeded at first boot. The password
@@ -34,6 +40,8 @@ admin_cidr = "203.0.113.42/32"
 seed_admin_email = "you@example.com"
 
 # Optional: an existing EC2 key pair name to enable SSH access. Leave
-# empty to skip — AWS Systems Manager Session Manager is available as
-# an alternative (the instance role grants SSM access).
+# this commented out to skip — AWS Systems Manager Session Manager is
+# the default access path and works without a key pair (the instance
+# role grants SSM access; cloud-init installs the agent). Only set
+# this if you want SSH as a real fallback to SSM.
 # ssh_key_name = "my-key-pair"

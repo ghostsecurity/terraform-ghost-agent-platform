@@ -86,12 +86,14 @@ resource "aws_route_table_association" "public" {
 module "ghost_agent" {
   source = "../.."
 
+  name_prefix      = "ghost-agent"
   image_registry   = var.image_registry
   image_tag        = var.image_tag
   subnet_id        = aws_subnet.public.id
   admin_cidr       = var.admin_cidr
   seed_admin_email = var.seed_admin_email
   ssh_key_name     = var.ssh_key_name
+  worker_replicas  = 4
 }
 
 # ----------------------------------------------------------------------

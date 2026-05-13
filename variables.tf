@@ -23,7 +23,7 @@ variable "subnet_id" {
 }
 
 variable "admin_cidr" {
-  description = "CIDR block allowed SSH (port 22) access to the VM. Set tightly — e.g. an office IP /32 or a VPN egress block. Avoid 0.0.0.0/0."
+  description = "CIDR block allowed SSH (port 22) access to the VM. Gates the security-group rule for port 22 only — it has no effect on AWS Systems Manager Session Manager, which tunnels via the instance's egress to the SSM service and is the default access path when ssh_key_name is empty. Set this tightly (e.g. an office IP /32 or a VPN egress block, never 0.0.0.0/0) as defense-in-depth, even if you don't plan to use SSH."
   type        = string
 
   validation {
@@ -116,7 +116,7 @@ variable "worker_replicas" {
 # ----------------------------------------------------------------------
 
 variable "ssh_key_name" {
-  description = "Optional. Name of an existing EC2 key pair to attach to the instance for SSH access. Leave empty to skip — AWS Systems Manager Session Manager is available as an alternative (the instance role grants SSM access)."
+  description = "Optional. Name of an existing EC2 key pair to attach to the instance for SSH access. Leave empty (the default) to skip key-pair attachment entirely — AWS Systems Manager Session Manager is available without a key pair (the instance role grants SSM access and cloud-init installs the SSM agent). When this is empty, var.admin_cidr still controls the SSH security-group rule but has no auth-capable target behind it; set ssh_key_name to a real EC2 key pair name to make SSH usable."
   type        = string
   default     = ""
 }
