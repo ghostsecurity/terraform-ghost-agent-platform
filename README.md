@@ -92,6 +92,7 @@ Retrieve the initial admin password:
 
 ```bash
 aws secretsmanager get-secret-value \
+  --region us-east-1 \
   --secret-id "$(terraform output -json secret_arns | jq -r .seed_admin_password)" \
   --query SecretString --output text
 ```
