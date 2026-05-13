@@ -1,0 +1,188 @@
+# Ghost Agent Platform — production docker-compose for a single-VM
+# deployment. Cloud-init writes this file to /opt/exo/ on the host;
+# the operator runs `docker compose -f docker-compose.prod.yml ...`
+# from there.
+#
+# All stateful data lives on the EBS data volume mounted at
+# /var/lib/exo. Image registry + tag are substituted from /opt/exo/.env
+# (populated by cloud-init from module variables). Caddy is the only
+# service that publishes host ports.
+#
+# Operator update flow (after a new image tag is published):
+#   ssh ec2-user@<host>
+#   cd /opt/exo
+#   sudo sed -i 's/^TAG=.*/TAG=vX.Y.Z/' .env
+#   sudo docker compose -f docker-compose.prod.yml pull
+#   sudo docker compose -f docker-compose.prod.yml up -d
+
+services:
+  gateway:
+    image: ${REGISTRY}/exo-server:${TAG}
+    restart: unless-stopped
+    command: ["-config", "/etc/exo/config.toml"]
+    environment:
+      # FIPS 140-3 mode. GOFIPS140 selects the validated crypto module
+      # at build time; GODEBUG=fips140=on activates it at runtime;
+      # EXO_REQUIRE_FIPS makes startup fatal if FIPS isn't active.
+      GOFIPS140: latest
+      GODEBUG: fips140=on
+      EXO_REQUIRE_FIPS: "true"
+      # Channel connectors. Sourced from /opt/exo/.env (which cloud-init
+      # populates from AWS Secrets Manager). Empty defaults so a missing
+      # secret doesn't break compose substitution.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+    volumes:
+      - /opt/exo/config.toml:/etc/exo/config.toml:ro
+      - /var/lib/exo/artifacts:/var/lib/exo/artifacts
+      - /var/lib/exo/tls:/var/lib/exo/tls
+    networks:
+      internal:
+        ipv4_address: 172.28.0.11
+      database:
+      external:
+    depends_on:
+      database:
+        condition: service_healthy
+      credential-proxy:
+        condition: service_started
+
+  # Only component with ENCRYPTION_KEY. Holds the MITM CA private key
+  # and the service CA private key. NOT reachable from outside the VM:
+  # the MITM (:443), control plane (:8444), and DNS (:53) listeners are
+  # bridge-only.
+  credential-proxy:
+    image: ${REGISTRY}/exo-credential-proxy:${TAG}
+    restart: unless-stopped
+    command: ["-config", "/etc/exo/config.proxy.toml"]
+    environment:
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in /opt/exo/.env}
+      GOFIPS140: latest
+      GODEBUG: fips140=on
+      EXO_REQUIRE_FIPS: "true"
+    volumes:
+      - /opt/exo/config.proxy.toml:/etc/exo/config.proxy.toml:ro
+      - /var/lib/exo/tls:/var/lib/exo/tls
+      - /var/lib/exo/tls-public:/var/lib/exo/tls-public
+    networks:
+      # Fixed IP — workers' `dns:` directive depends on this and must
+      # match [proxy].dns_proxy_ip in config.proxy.toml.
+      internal:
+        ipv4_address: 172.28.0.10
+      database:
+      external:
+    depends_on:
+      database:
+        condition: service_healthy
+
+  database:
+    image: mongo:7
+    restart: unless-stopped
+    # Single-node replica set (rs0) — required for the change streams
+    # the gateway tails on db.run_events.watch() for live UI updates.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - /var/lib/exo/mongo-data:/data/db
+    networks:
+      - database
+    # Healthcheck doubles as one-time rs.initiate() bootstrap
+    # (idempotent on subsequent boots).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          mongosh --quiet --eval '
+            try { rs.status() } catch (e) {
+              rs.initiate({_id: "rs0", members: [{_id: 0, host: "database:27017"}]});
+            }
+          ' && mongosh --quiet --eval 'db.hello().isWritablePrimary'
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  worker:
+    image: ${REGISTRY}/exo-worker:${TAG}
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    environment:
+      EXO_RUNNER_WS_URL: wss://gateway:8000/api/v1/runners/connect
+      EXO_RUNNER_WORKER_TYPES: general
+      EXO_RUNNER_CAPABILITIES: task
+      EXO_RUNNER_SESSION_ROOT: /run/exo
+      EXO_ARTIFACT_ROOT: /var/lib/exo/artifacts
+      EXO_AGENT_EXTRA_CA_CERTS: /var/lib/exo/tls/ca.crt
+      EXO_RUNNER_IDENTITY_DIR: /var/lib/exo/runner-identity
+    # All DNS lookups go through the credential-proxy so every external
+    # HTTPS dial lands at the MITM listener and the run token gets
+    # swapped for the real upstream secret.
+    dns:
+      - 172.28.0.10
+    volumes:
+      - /var/lib/exo/artifacts:/var/lib/exo/artifacts
+      # Worker sees ONLY the public CA cert — never the signing key.
+      # tls-public mounts at /var/lib/exo/tls inside the container to
+      # match EXO_AGENT_EXTRA_CA_CERTS above (which expects ca.crt at
+      # that path).
+      - /var/lib/exo/tls-public:/var/lib/exo/tls:ro
+      - /var/lib/exo/runner-identity:/var/lib/exo/runner-identity
+    networks:
+      - internal
+    depends_on:
+      gateway:
+        condition: service_started
+      credential-proxy:
+        condition: service_started
+
+  # Public TLS terminator + static UI server + /api reverse proxy.
+  # The only service in this compose that publishes host ports.
+  # Auto-LE: Caddy provisions and renews a Let's Encrypt cert for
+  # ${DOMAIN} (either a real FQDN or <dashed-eip>.nip.io). Cert + LE
+  # account state persist in /var/lib/exo/caddy-data across restarts.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/exo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/lib/exo/caddy-data:/data
+      - /var/lib/exo/caddy-config:/config
+      - /var/lib/exo/ui:/srv/ui:ro
+    networks:
+      - internal
+      - external
+    depends_on:
+      gateway:
+        condition: service_started
+
+  # Oneshot that copies the static UI bundle out of the exo-ui image
+  # into the shared bind mount Caddy reads from. Runs once on each
+  # `up -d`, then exits. `restart: "no"` keeps it from looping.
+  ui-extract:
+    image: ${REGISTRY}/exo-ui:${TAG}
+    command: ["/bin/sh", "-c", "cp -rT /usr/share/nginx/html /srv/ui"]
+    restart: "no"
+    volumes:
+      - /var/lib/exo/ui:/srv/ui
+
+networks:
+  # Stack-internal traffic. `internal: true` blocks external egress,
+  # forcing worker outbound HTTPS through the credential-proxy.
+  # gateway and credential-proxy hold fixed IPs for stable DNS and
+  # for the worker's `dns:` directive.
+  internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  database:
+    driver: bridge
+  external:
+    driver: bridge
