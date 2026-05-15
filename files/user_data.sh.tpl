@@ -203,6 +203,31 @@ chown -R 999:999 "$${DATA_DIR}/mongo-data"
 chown -R "$${WORKER_UID}:$${WORKER_GID}" "$${DATA_DIR}/artifacts" "$${DATA_DIR}/runner-identity"
 chmod 0700 "$${DATA_DIR}/tls"
 
+# Worker /etc/resolv.conf. Bind-mounted into the worker container to
+# bypass Docker's embedded DNS resolver, which on user-defined
+# networks listens at 127.0.0.11 and is supposed to forward to the
+# upstream configured via the compose `dns:` directive. In this stack
+# the forwarder returns SERVFAIL when the upstream is a docker bridge
+# IP (the credential-proxy at 172.28.0.10) — even though the daemon's
+# netns can reach the proxy fine on :53. Writing the resolver list
+# directly sidesteps the embedded resolver entirely:
+#   - 127.0.0.11 stays FIRST so docker service discovery still resolves
+#     stack-internal names (gateway, database, credential-proxy)
+#     without depending on the credential-proxy being up.
+#   - 172.28.0.10 is the fallthrough for everything else — every
+#     public hostname resolves to the proxy's own IP, landing all
+#     agent HTTPS dials at the MITM listener so the run-token gets
+#     swapped for the real upstream secret.
+#   - ndots:0 disables search-list expansion so absolute names like
+#     `api.openai.com` aren't tried as `api.openai.com.ec2.internal`
+#     first.
+cat >"$${DATA_DIR}/worker-resolv.conf" <<'EOF'
+nameserver 127.0.0.11
+nameserver 172.28.0.10
+options ndots:0
+EOF
+chmod 0644 "$${DATA_DIR}/worker-resolv.conf"
+
 # ----------------------------------------------------------------------
 # 5. Fetch secrets from AWS Secrets Manager
 # ----------------------------------------------------------------------
