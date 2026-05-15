@@ -117,12 +117,16 @@ services:
       EXO_ARTIFACT_ROOT: /var/lib/exo/artifacts
       EXO_AGENT_EXTRA_CA_CERTS: /var/lib/exo/tls/ca.crt
       EXO_RUNNER_IDENTITY_DIR: /var/lib/exo/runner-identity
-    # All DNS lookups go through the credential-proxy so every external
-    # HTTPS dial lands at the MITM listener and the run token gets
-    # swapped for the real upstream secret.
-    dns:
-      - 172.28.0.10
     volumes:
+      # Bind-mounted /etc/resolv.conf — bypasses Docker's embedded DNS
+      # resolver at 127.0.0.11, which on this stack returns SERVFAIL
+      # when asked to forward to the credential-proxy's bridge IP.
+      # The file (written once by cloud-init) lists 127.0.0.11 first
+      # for stack-internal service discovery and 172.28.0.10 second so
+      # every public hostname falls through to the proxy's DNS, which
+      # answers with its own IP for MITM interception. See the comment
+      # in user_data.sh.tpl for the full rationale.
+      - /var/lib/exo/worker-resolv.conf:/etc/resolv.conf:ro
       - /var/lib/exo/artifacts:/var/lib/exo/artifacts
       # Worker sees ONLY the public CA cert — never the signing key.
       # tls-public mounts at /var/lib/exo/tls inside the container to
