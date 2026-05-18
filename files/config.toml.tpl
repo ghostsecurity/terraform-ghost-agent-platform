@@ -46,7 +46,8 @@ internal_ca_path = "/var/lib/exo/tls/service-ca.crt"
 tls_dev_dir = "/var/lib/exo/tls"
 service_ca_cert_path = "/var/lib/exo/tls/service-ca.crt"
 gateway_cert_dir = "/var/lib/exo/tls"
-per_run_rate_limit = 10
+per_run_burst          = 100
+per_run_refill_per_sec = 20
 
 # OAuth callback target. In prod, Caddy fronts the gateway with a real
 # Let's Encrypt cert at the public domain, so callbacks land here at

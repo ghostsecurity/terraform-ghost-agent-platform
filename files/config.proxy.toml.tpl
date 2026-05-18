@@ -28,7 +28,8 @@ public_url = "https://credential-proxy"
 internal_listen_addr = ":8444"
 tls_dev_dir = "/var/lib/exo/tls"
 gateway_cert_dir = "/var/lib/exo/tls"
-per_run_rate_limit = 10
+per_run_burst          = 100
+per_run_refill_per_sec = 20
 
 # DNS server. Worker containers' resolv.conf points here; the server
 # answers A/AAAA for public hostnames with the proxy's own bridge IP
