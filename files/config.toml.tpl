@@ -55,6 +55,27 @@ per_run_refill_per_sec = 20
 # needed.
 callback_base_url = "https://@@DOMAIN@@"
 
+[updater]
+# Consumed by the exo-updater binary; the gateway ignores this
+# section. The two processes share this file because both also read
+# [proxy] for cert paths and TLS-dev-dir — keeping them on the same
+# config.toml avoids duplicating those values.
+listen_addr = ":8080"
+ecr_region = "@@AWS_REGION@@"
+ecr_repository = "exo-server"
+poll_interval = "10m"
+env_file_path = "/opt/exo/.env"
+compose_file_path = "/opt/exo/docker-compose.prod.yml"
+# managed_services intentionally excludes "exo-updater" — every
+# service shares the same TAG, so an unscoped `up -d` would recreate
+# the updater container mid-flight and orphan the in-progress
+# dispatch. Bumping the updater image is operator-driven (see the
+# header comment in docker-compose.prod.yml).
+managed_services = ["gateway", "credential-proxy", "worker", "ui"]
+cert_dir = "/var/lib/exo/tls"
+cert_ttl = "1h"
+cert_renew_before = "15m"
+
 [[seed.users]]
 email = "@@SEED_ADMIN_EMAIL@@"
 password = "@@SEED_ADMIN_PASSWORD@@"
