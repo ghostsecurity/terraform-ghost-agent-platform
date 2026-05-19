@@ -287,6 +287,7 @@ sed \
   -e "s|@@JWT_SECRET@@|$${JWT_SECRET}|g" \
   -e "s|@@SEED_ADMIN_EMAIL@@|$${SEED_ADMIN_EMAIL}|g" \
   -e "s|@@SEED_ADMIN_PASSWORD@@|$${SEED_ADMIN_PASSWORD}|g" \
+  -e "s|@@AWS_REGION@@|$${AWS_REGION}|g" \
   /tmp/config.toml.tpl > "$${OPT_DIR}/config.toml"
 rm /tmp/config.toml.tpl
 
@@ -297,6 +298,14 @@ rm /tmp/config.toml.tpl
 cat >"$${OPT_DIR}/.env" <<EOF
 REGISTRY=$${IMAGE_REGISTRY}
 TAG=$${IMAGE_TAG}
+# Updater image tag is tracked separately from the rest of the
+# stack. UI-driven upgrades rewrite TAG but leave UPDATER_TAG
+# untouched (the updater excludes itself from `docker compose up
+# -d`); operator bumps it out of band on release.
+UPDATER_TAG=$${IMAGE_TAG}
+# AWS_REGION is consumed by the exo-updater container's AWS SDK
+# (DescribeImages calls to ECR). Same region as the instance.
+AWS_REGION=$${AWS_REGION}
 WORKER_REPLICAS=$${WORKER_REPLICAS}
 ENCRYPTION_KEY=$${ENCRYPTION_KEY}
 SLACK_APP_TOKEN=$${SLACK_APP_TOKEN}
@@ -310,7 +319,7 @@ chmod 0600 "$${OPT_DIR}/config.toml"
 # 7. Verify image signatures with cosign
 # ----------------------------------------------------------------------
 echo "===> Verifying image signatures"
-for img in exo-server exo-credential-proxy exo-worker exo-ui; do
+for img in exo-server exo-credential-proxy exo-worker exo-ui exo-updater; do
   echo "       cosign verify $${img}:$${IMAGE_TAG}"
   cosign verify "$${IMAGE_REGISTRY}/$${img}:$${IMAGE_TAG}" \
     --certificate-oidc-issuer="$${SIGN_OIDC_ISSUER}" \

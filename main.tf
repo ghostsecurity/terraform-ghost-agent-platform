@@ -51,10 +51,10 @@ locals {
   ghost_account_id = local.registry_parts[0]
   ghost_region     = local.registry_parts[3]
 
-  # ECR repo ARNs for the four images the EC2 needs to pull. Used by
+  # ECR repo ARNs for the five images the EC2 needs to pull. Used by
   # the IAM policy in iam.tf.
   ghost_ecr_repo_arns = [
-    for img in ["exo-server", "exo-credential-proxy", "exo-worker", "exo-ui"] :
+    for img in ["exo-server", "exo-credential-proxy", "exo-worker", "exo-ui", "exo-updater"] :
     "arn:aws:ecr:${local.ghost_region}:${local.ghost_account_id}:repository/${img}"
   ]
 
