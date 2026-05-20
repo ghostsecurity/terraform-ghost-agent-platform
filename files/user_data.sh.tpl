@@ -27,6 +27,7 @@ echo "===> Bootstrap starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ----------------------------------------------------------------------
 AWS_REGION='${aws_region}'
 IMAGE_REGISTRY='${image_registry}'
+IMAGE_REGISTRY_REGION='${image_registry_region}'
 IMAGE_TAG='${image_tag}'
 BRINGUP_DOMAIN='${bringup_domain}'
 SEED_ADMIN_EMAIL='${seed_admin_email}'
@@ -148,7 +149,7 @@ chmod +x /usr/local/bin/cosign
 # 3. ECR login + hourly re-login timer (tokens expire every 12h)
 # ----------------------------------------------------------------------
 echo "===> Logging in to ECR"
-aws ecr get-login-password --region "$${AWS_REGION}" \
+aws ecr get-login-password --region "$${IMAGE_REGISTRY_REGION}" \
   | docker login --username AWS --password-stdin "$${IMAGE_REGISTRY}"
 
 cat >/etc/systemd/system/ecr-login.service <<EOF
@@ -158,7 +159,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${image_registry}'
+ExecStart=/bin/bash -c 'aws ecr get-login-password --region ${image_registry_region} | docker login --username AWS --password-stdin ${image_registry}'
 EOF
 
 cat >/etc/systemd/system/ecr-login.timer <<'EOF'

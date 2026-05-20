@@ -35,6 +35,7 @@ resource "aws_instance" "vm" {
   user_data_base64 = base64gzip(templatefile("${path.module}/files/user_data.sh.tpl", {
     aws_region                   = local.aws_region
     image_registry               = var.image_registry
+    image_registry_region        = local.ghost_region
     image_tag                    = var.image_tag
     bringup_domain               = local.bringup_domain
     seed_admin_email             = var.seed_admin_email
@@ -95,7 +96,7 @@ resource "aws_ebs_volume" "data" {
     # CA private key (encrypts every stored credential) and the service
     # CA (trust root for every runner identity). Re-enable destruction
     # by removing this line temporarily.
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
