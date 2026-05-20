@@ -96,7 +96,7 @@ resource "aws_ebs_volume" "data" {
     # CA private key (encrypts every stored credential) and the service
     # CA (trust root for every runner identity). Re-enable destruction
     # by removing this line temporarily.
-    prevent_destroy = false
+    prevent_destroy = true
   }
 }
 
