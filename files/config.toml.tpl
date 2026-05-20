@@ -71,7 +71,13 @@ compose_file_path = "/opt/exo/docker-compose.prod.yml"
 # the updater container mid-flight and orphan the in-progress
 # dispatch. Bumping the updater image is operator-driven (see the
 # header comment in docker-compose.prod.yml).
-managed_services = ["gateway", "credential-proxy", "worker", "ui"]
+#
+# "ui-extract" (not "ui") is the right service name: the UI bundle
+# lands on disk via a oneshot copy-out container of the same name;
+# Caddy serves the static files from that bind mount. Caddy and the
+# database are pinned to fixed upstream images so they're also
+# excluded.
+managed_services = ["gateway", "credential-proxy", "worker", "ui-extract"]
 cert_dir = "/var/lib/exo/tls"
 cert_ttl = "1h"
 cert_renew_before = "15m"

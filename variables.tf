@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------------
 
 variable "image_registry" {
-  description = "Container registry hosting the Ghost Agent Platform images, e.g. \"012345678901.dkr.ecr.us-east-1.amazonaws.com\". Provided by Ghost Security during onboarding. The AWS account running this module must be granted cross-account ECR pull access by Ghost before `terraform apply` succeeds."
+  description = "Container registry hosting the Ghost Agent Platform images, e.g. \"012345678901.dkr.ecr.<region, e.g. us-east-1>.amazonaws.com\". Provided by Ghost Security during onboarding. The AWS account running this module must be granted cross-account ECR pull access by Ghost before `terraform apply` succeeds."
   type        = string
 
   validation {
@@ -13,7 +13,7 @@ variable "image_registry" {
 }
 
 variable "image_tag" {
-  description = "Image tag to deploy (e.g. \"v1.0.0\"). Must exist in image_registry for all four Ghost Agent Platform service images."
+  description = "Image tag to deploy (e.g. \"v1.0.0\"). Must exist in image_registry for every Ghost Agent Platform service image (gateway, credential-proxy, worker, ui, updater)."
   type        = string
 }
 

@@ -33,7 +33,7 @@ services:
   gateway:
     image: ${REGISTRY}/exo-server:${TAG}
     restart: unless-stopped
-    command: ["-config", "/etc/exo/config.toml"]
+    command: [ "-config", "/etc/exo/config.toml" ]
     environment:
       # FIPS 140-3 mode. GOFIPS140 selects the validated crypto module
       # at build time; GODEBUG=fips140=on activates it at runtime;
@@ -78,7 +78,7 @@ services:
   credential-proxy:
     image: ${REGISTRY}/exo-credential-proxy:${TAG}
     restart: unless-stopped
-    command: ["-config", "/etc/exo/config.proxy.toml"]
+    command: [ "-config", "/etc/exo/config.proxy.toml" ]
     environment:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in /opt/exo/.env}
       GOFIPS140: latest
@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
     # Single-node replica set (rs0) — required for the change streams
     # the gateway tails on db.run_events.watch() for live UI updates.
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    command: [ "--replSet", "rs0", "--bind_ip_all" ]
     volumes:
       - /var/lib/exo/mongo-data:/data/db
     networks:
@@ -180,22 +180,38 @@ services:
   exo-updater:
     image: ${REGISTRY}/exo-updater:${UPDATER_TAG:-${TAG}}
     restart: unless-stopped
-    command: ["-config", "/etc/exo/config.toml"]
+    command: [ "-config", "/etc/exo/config.toml" ]
     environment:
       AWS_REGION: ${AWS_REGION}
       GOFIPS140: latest
       GODEBUG: fips140=on
       EXO_REQUIRE_FIPS: "true"
     volumes:
-      # Read-only config + compose YAML — the updater never edits
-      # either. The .env file IS read+write because that's where the
-      # TAG rewrite lands. /var/run/docker.sock is mounted to let the
-      # updater shell out to `docker compose`.
+      # The updater's own config lives at /etc/exo/config.toml
+      # (different in-container path → no overlap with /opt/exo
+      # below). Mounting /opt/exo as a directory rather than its
+      # individual files is deliberate: the updater's atomic .env
+      # rewrite uses rename(2), and Linux refuses to rename over a
+      # single-file bind mount (EBUSY). Mounting the parent
+      # directory keeps the rename inside the bind, which works.
+      # Security trade-off is small — the docker socket already
+      # gives this container full host control, so visibility of
+      # the other files under /opt/exo doesn't widen the blast
+      # radius materially.
       - /opt/exo/config.toml:/etc/exo/config.toml:ro
-      - /opt/exo/docker-compose.prod.yml:/opt/exo/docker-compose.prod.yml:ro
-      - /opt/exo/.env:/opt/exo/.env
+      - /opt/exo:/opt/exo
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/exo/tls:/var/lib/exo/tls
+      # The docker CLI inside this container needs auth to pull
+      # from ECR — `docker compose pull` resolves credentials on
+      # the client side, not via the daemon. Cloud-init does
+      # `aws ecr get-login-password | docker login` on the host
+      # (refreshed hourly by the ecr-login.timer systemd unit),
+      # which populates /root/.docker/config.json on the host.
+      # Bind-mounting that directory read-only into the container
+      # lets the container's docker CLI use the host's existing
+      # ECR auth without needing its own login flow.
+      - /root/.docker:/root/.docker:ro
     networks:
       # Fixed IP on the internal bridge so the gateway's UPDATER_URL
       # hostname resolves predictably. The `external` network is
@@ -247,7 +263,7 @@ services:
   # `up -d`, then exits. `restart: "no"` keeps it from looping.
   ui-extract:
     image: ${REGISTRY}/exo-ui:${TAG}
-    command: ["/bin/sh", "-c", "cp -rT /usr/share/nginx/html /srv/ui"]
+    command: [ "/bin/sh", "-c", "cp -rT /usr/share/nginx/html /srv/ui" ]
     restart: "no"
     volumes:
       - /var/lib/exo/ui:/srv/ui

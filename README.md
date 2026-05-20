@@ -4,7 +4,7 @@ Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an 
 
 ## What gets deployed
 
-- **1 EC2 instance** (`t3.large` by default, AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose.
+- **1 EC2 instance** (`t3.large` by default, AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that handles UI-driven image bumps (see [Updating the deployment](#updating-the-deployment)).
 - **1 EBS data volume** (100 GB gp3 by default) mounted at `/var/lib/exo` — holds the database, TLS material, run artifacts, and signing-cert state. Configured with `prevent_destroy = true` to guard against accidental teardown.
 - **1 Elastic IP** providing a stable public address.
 - **1 Security group** — SSH from `var.admin_cidr` only, HTTP/HTTPS from `var.public_ingress_cidrs` (default: world).
@@ -33,7 +33,7 @@ module "ghost_agent" {
   source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=v0.1.0"
 
   # Provided by Ghost during onboarding
-  image_registry = "012345678901.dkr.ecr.us-east-1.amazonaws.com"
+  image_registry = "012345678901.dkr.ecr.<region>.amazonaws.com"
   image_tag      = "v1.0.0"
 
   # Network placement
@@ -68,7 +68,7 @@ Two ways to watch:
 # From your laptop — no SSM/SSH needed. Console output is buffered
 # by EC2 and typically lags 1-3 minutes, but works even before the
 # SSM agent comes up:
-aws ec2 get-console-output --region us-east-1 \
+aws ec2 get-console-output --region <region, e.g. us-east-1> \
   --instance-id "$(terraform output -raw instance_id)" \
   --latest --output text | tail -100
 ```
@@ -83,16 +83,16 @@ sudo tail -f /var/log/ghost-agent-bootstrap.log
 Once the `===> Bootstrap complete` line appears the stack is up. Useful terraform outputs:
 
 ```bash
-terraform output bringup_url   # e.g. https://3-14-15-92.nip.io
-terraform output ssh_command   # ssh ec2-user@<eip>
-terraform output secret_arns   # ARNs for the auto-generated secrets
+terraform output bringup_url                # e.g. https://3-14-15-92.nip.io
+terraform output -raw ssm_session_command   # aws ssm start-session --region <region> --target i-01234...
+terraform output secret_arns                # ARNs for the auto-generated secrets
 ```
 
 Retrieve the initial admin password:
 
 ```bash
 aws secretsmanager get-secret-value \
-  --region us-east-1 \
+  --region <region> \
   --secret-id "$(terraform output -json secret_arns | jq -r .seed_admin_password)" \
   --query SecretString --output text
 ```
@@ -101,29 +101,45 @@ Open the `bringup_url` in a browser, sign in with `seed_admin_email` + the passw
 
 ## Updating the deployment
 
-To roll out a new image tag (provided by Ghost):
+Three paths, in order of operator overhead.
 
-1. Bump `image_tag` in the module invocation.
-2. `terraform apply`.
+### In-app (preferred)
 
-Cloud-init only runs on first boot, so the AMI/user_data are intentionally `ignore_changes` in the module. To actually move to a new tag, an operator either:
+A workspace admin opens the UI's workspace dropdown → System → Version. The page shows the running tag and (after a check-against-ECR) the latest available release. Clicking **Upgrade to vX.Y.Z** dispatches the bump to the in-stack updater container, which:
 
-- SSH/SSM into the VM and run the operator update flow below (preferred — no instance churn), or
-- Taint the instance to force replacement: `terraform taint module.ghost_agent.aws_instance.vm && terraform apply` (heavier — instance is replaced, but the data EBS volume + secrets persist).
+1. Rewrites `TAG=` in `/opt/exo/.env`
+2. Runs `docker compose pull` for the managed services (gateway, credential-proxy, worker, ui)
+3. Runs `docker compose up -d` for the same set
 
-### Operator update flow (no instance churn)
+The updater excludes itself from the dispatched `up -d` so it doesn't kill the container running the upgrade. Brief ~10-30s window during the gateway swap where the API may 502 — acceptable for a single-host deployment.
+
+**Rollback** works the same way: the page also offers a one-click rollback to the prior tag, derived from the audit log of past upgrades.
+
+### Out-of-band (operator SSH)
+
+When the updater itself needs a version bump (it doesn't auto-update), or as break-glass if the in-app path is broken:
 
 ```bash
-$(terraform output -raw ssh_command)            # or ssm_session_command
+$(terraform output -raw ssm_session_command)   # or ssh_command
 cd /opt/exo
 sudo sed -i 's/^TAG=.*/TAG=vNEW.TAG.HERE/' .env
+# To also bump the updater image (typically same tag, but pinned separately):
+sudo sed -i 's/^UPDATER_TAG=.*/UPDATER_TAG=vNEW.TAG.HERE/' .env
 sudo docker compose -f docker-compose.prod.yml pull
 sudo docker compose -f docker-compose.prod.yml up -d
 ```
 
-Restarts: gateway, credential-proxy, worker, ui-extract. The database container does not restart (pinned to `mongo:7`); Caddy does not restart (pinned to `caddy:2-alpine`). Brief ~10-30s window during the gateway swap where the API may 502 — acceptable for a single-host deployment.
+ECR repositories are configured with immutable tags so byte-identical reproduction is guaranteed.
 
-Rollback: same flow with the previous tag. ECR repositories are configured with immutable tags so byte-identical reproduction is guaranteed.
+### Terraform replace (heavier)
+
+Force a clean instance recycle by tainting the EC2 resource:
+
+```bash
+terraform apply -replace=module.ghost_agent.aws_instance.vm
+```
+
+The instance is replaced, cloud-init re-runs end-to-end (including cosign verification), but the data EBS volume and secrets persist. Useful when AMI / cloud-init changes need to land alongside an image bump. Note: the `var.image_tag` value written to `.env` by cloud-init overrides whatever the running stack was on, so make sure `image_tag` in tfvars matches the version you want before triggering a replace.
 
 ## Signature verification
 
