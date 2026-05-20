@@ -28,6 +28,7 @@ echo "===> Bootstrap starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 AWS_REGION='${aws_region}'
 IMAGE_REGISTRY='${image_registry}'
 IMAGE_REGISTRY_REGION='${image_registry_region}'
+IMAGE_REGISTRY_ACCOUNT_ID='${image_registry_account_id}'
 IMAGE_TAG='${image_tag}'
 BRINGUP_DOMAIN='${bringup_domain}'
 SEED_ADMIN_EMAIL='${seed_admin_email}'
@@ -288,7 +289,8 @@ sed \
   -e "s|@@JWT_SECRET@@|$${JWT_SECRET}|g" \
   -e "s|@@SEED_ADMIN_EMAIL@@|$${SEED_ADMIN_EMAIL}|g" \
   -e "s|@@SEED_ADMIN_PASSWORD@@|$${SEED_ADMIN_PASSWORD}|g" \
-  -e "s|@@AWS_REGION@@|$${AWS_REGION}|g" \
+  -e "s|@@IMAGE_REGISTRY_REGION@@|$${IMAGE_REGISTRY_REGION}|g" \
+  -e "s|@@IMAGE_REGISTRY_ACCOUNT_ID@@|$${IMAGE_REGISTRY_ACCOUNT_ID}|g" \
   /tmp/config.toml.tpl > "$${OPT_DIR}/config.toml"
 rm /tmp/config.toml.tpl
 
@@ -304,9 +306,6 @@ TAG=$${IMAGE_TAG}
 # untouched (the updater excludes itself from `docker compose up
 # -d`); operator bumps it out of band on release.
 UPDATER_TAG=$${IMAGE_TAG}
-# AWS_REGION is consumed by the exo-updater container's AWS SDK
-# (DescribeImages calls to ECR). Same region as the instance.
-AWS_REGION=$${AWS_REGION}
 WORKER_REPLICAS=$${WORKER_REPLICAS}
 ENCRYPTION_KEY=$${ENCRYPTION_KEY}
 SLACK_APP_TOKEN=$${SLACK_APP_TOKEN}

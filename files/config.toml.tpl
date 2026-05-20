@@ -61,8 +61,15 @@ callback_base_url = "https://@@DOMAIN@@"
 # [proxy] for cert paths and TLS-dev-dir — keeping them on the same
 # config.toml avoids duplicating those values.
 listen_addr = ":8080"
-ecr_region = "@@AWS_REGION@@"
-ecr_repository = "exo-server"
+ecr_region = "@@IMAGE_REGISTRY_REGION@@"
+# ecr_registry_id is the AWS account ID that owns the ECR repos
+# (Ghost's account, NOT the customer's). Required for cross-account
+# pulls: without it the SDK omits RegistryId on DescribeImages, ECR
+# treats the caller's account as the registry, and the call fails
+# AccessDenied even when Ghost's cross-account repo policy is set
+# up correctly.
+ecr_registry_id = "@@IMAGE_REGISTRY_ACCOUNT_ID@@"
+ecr_repository = "exo-worker"
 poll_interval = "10m"
 env_file_path = "/opt/exo/.env"
 compose_file_path = "/opt/exo/docker-compose.prod.yml"
