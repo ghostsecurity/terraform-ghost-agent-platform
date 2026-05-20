@@ -182,7 +182,6 @@ services:
     restart: unless-stopped
     command: [ "-config", "/etc/exo/config.toml" ]
     environment:
-      AWS_REGION: ${AWS_REGION}
       GOFIPS140: latest
       GODEBUG: fips140=on
       EXO_REQUIRE_FIPS: "true"

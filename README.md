@@ -30,7 +30,7 @@ Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an 
 ```hcl
 module "ghost_agent" {
   # Pin to a released tag for reproducibility (omit ?ref=… to track main).
-  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=v0.1.0"
+  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=v0.1.1"
 
   # Provided by Ghost during onboarding
   image_registry = "012345678901.dkr.ecr.<region>.amazonaws.com"
@@ -162,6 +162,7 @@ If a tag's signature fails verification, cloud-init exits before `docker compose
 | 502 from Caddy for `/api` calls | Gateway container down. `docker compose -f /opt/exo/docker-compose.prod.yml ps` and check gateway logs. |
 | Browser cert error / "not secure" warning | LE issuance failed (port 80 unreachable, DNS not resolving, rate limited). Check `docker logs <caddy-container>`. |
 | Database not initializing | First-boot replica-set bootstrap timing. Verify `/var/lib/exo` is actually the EBS mount (`mountpoint /var/lib/exo`) — if not, the bootstrap script aborts before docker starts. |
+| `terraform apply` fails with `secret with this name is already scheduled for deletion` | A previous `terraform destroy` puts secrets into a 7-day soft-delete (`recovery_window_in_days = 7` in [secrets.tf](secrets.tf)). To re-deploy into the same account before the window expires, force-delete the leftovers: `for s in jwt-secret encryption-key seed-admin-password slack; do aws secretsmanager delete-secret --secret-id "ghost-agent/$s" --force-delete-without-recovery --region <region>; done` |
 
 Persistent log locations on the VM:
 
