@@ -9,7 +9,7 @@
 #   <12-digit-account>.dkr.ecr.<region>.amazonaws.com
 # Ghost will share this value alongside the cross-account ECR pull
 # grant for the AWS account this module is deployed into.
-image_registry = "REPLACE_ME.dkr.ecr.us-east-1.amazonaws.com"
+image_registry = "REPLACE_ME.dkr.ecr.<region>.amazonaws.com"
 
 # Released image tag to deploy. Ghost publishes signed tags in the
 # `vX.Y.Z` semver format. Check with Ghost for the latest released
