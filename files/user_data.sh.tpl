@@ -179,6 +179,49 @@ systemctl daemon-reload
 systemctl enable --now ecr-login.timer
 
 # ----------------------------------------------------------------------
+# 3b. Daily prune of stale Docker images
+# ----------------------------------------------------------------------
+# Each in-app upgrade pulls new images but leaves the previous release's
+# images on disk so a rollback can happen instantly. Over many releases
+# that accumulates on the root EBS volume (which is where /var/lib/docker
+# lives - separate from the /var/lib/exo data volume).
+#
+# Safety: pruning a tag locally does NOT break a future rollback to that
+# tag. Every dispatch starts with `docker compose pull`, which re-fetches
+# missing images from ECR; the rollback just takes a few extra seconds.
+
+cat >/etc/systemd/system/exo-docker-prune.service <<'EOF'
+[Unit]
+Description=Prune unused Docker images older than 30 days
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker image prune -a --filter "until=720h" -f
+EOF
+
+cat >/etc/systemd/system/exo-docker-prune.timer <<'EOF'
+[Unit]
+Description=Daily Docker image prune
+
+[Timer]
+OnCalendar=daily
+# Spread fleet-wide prunes across an hour so they don't all hit ECR /
+# disk at the same instant if a future change makes the job heavier.
+RandomizedDelaySec=1h
+# Persistent=true catches up missed runs (host was off, etc.) on next
+# boot instead of waiting another 24h.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now exo-docker-prune.timer
+
+# ----------------------------------------------------------------------
 # 4. Create the on-VM directory layout under /var/lib/exo
 # ----------------------------------------------------------------------
 echo "===> Creating data subdirectories"
