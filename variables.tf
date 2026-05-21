@@ -89,9 +89,9 @@ variable "instance_type" {
 }
 
 variable "root_volume_size_gb" {
-  description = "Optional. Root EBS volume size in GB (OS + Docker image storage). 30 is the AL2023 AMI's snapshot size — EC2 rejects anything smaller. Pulled images use ~5-10 GB on top of the OS, so the default leaves a few GB of headroom; oversize if Docker layer accumulation is a concern."
+  description = "Optional. Root EBS volume size in GB (OS + Docker image storage). 30 is the AL2023 AMI's snapshot size — EC2 rejects anything smaller. Each in-app upgrade leaves the prior release's images on disk for rollback; a daily prune timer cleans them up after 30 days. The 50 GB default keeps a comfortable buffer between current/previous tags and the prune deadline."
   type        = number
-  default     = 30
+  default     = 50
 
   validation {
     condition     = var.root_volume_size_gb >= 30
