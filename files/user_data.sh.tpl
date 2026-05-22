@@ -129,6 +129,26 @@ echo "===> Installing system packages"
 # access (the alternative to SSH) doesn't work.
 dnf install -y docker jq amazon-ssm-agent
 
+# Daemon-wide log rotation. Without this, the json-file driver
+# accumulates container stdout/stderr under /var/lib/docker/containers/*/
+# without bound - a verbose worker on a busy stack can fill the root
+# EBS volume. The cap below holds each container to ≤ 3 × 10 MB
+# of log retention (current + 2 rotated), which is small enough that a
+# fully-loaded stack (gateway + proxy + db + N workers + caddy +
+# updater) stays under ~1 GB of log spillover even with chatty agent
+# output. Written BEFORE `systemctl enable --now docker` so the daemon
+# picks it up on its very first boot — no restart needed.
+mkdir -p /etc/docker
+cat >/etc/docker/daemon.json <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+
 systemctl enable --now docker
 systemctl enable --now amazon-ssm-agent
 usermod -aG docker ec2-user
