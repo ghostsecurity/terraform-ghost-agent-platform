@@ -30,7 +30,7 @@ Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an 
 ```hcl
 module "ghost_agent" {
   # Pin to a released tag for reproducibility (omit ?ref=… to track main).
-  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.2>"
+  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.3>"
 
   # Provided by Ghost during onboarding
   image_registry = "012345678901.dkr.ecr.<region>.amazonaws.com"
