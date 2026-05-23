@@ -201,24 +201,21 @@ systemctl enable --now ecr-login.timer
 # ----------------------------------------------------------------------
 # 3b. Daily prune of stale Docker images
 # ----------------------------------------------------------------------
-# Each in-app upgrade pulls new images but leaves the previous release's
-# images on disk so a rollback can happen instantly. Over many releases
-# that accumulates on the root EBS volume (which is where /var/lib/docker
-# lives - separate from the /var/lib/exo data volume).
-#
-# Safety: pruning a tag locally does NOT break a future rollback to that
-# tag. Every dispatch starts with `docker compose pull`, which re-fetches
-# missing images from ECR; the rollback just takes a few extra seconds.
+# Each in-app upgrade leaves the previous release's images on disk for
+# instant rollback. The 7-day window keeps a 30 GB root volume safe at
+# ≤5 releases/week (worker image dominates at ~4 GB each). Pruning a
+# tag locally is safe: `docker compose pull` re-fetches from ECR on
+# rollback, just takes a few extra seconds.
 
 cat >/etc/systemd/system/exo-docker-prune.service <<'EOF'
 [Unit]
-Description=Prune unused Docker images older than 30 days
+Description=Prune unused Docker images older than 7 days
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/docker image prune -a --filter "until=720h" -f
+ExecStart=/usr/bin/docker image prune -a --filter "until=168h" -f
 EOF
 
 cat >/etc/systemd/system/exo-docker-prune.timer <<'EOF'
