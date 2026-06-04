@@ -101,7 +101,7 @@ Open the `bringup_url` in a browser, sign in with `seed_admin_email` + the passw
 
 ## Ghost support access (cross-account SSM)
 
-By default this module publishes an IAM role, `<name_prefix>-ssm-support` (e.g. `ghost-agent-ssm-support`), that Ghost Security assumes to open an AWS Systems Manager Session Manager shell on the VM for support. Its trust is scoped to a single Ghost support role, so only that role can assume it. The role grants only `ssm:StartSession` on this one instance plus management of the operator's own sessions: no SSH key, no inbound ports, and no access to any other resource. The instance still dials out to the SSM service exactly as it does for your own `ssm_session_command`; nothing new is exposed to the internet.
+By default this module publishes an IAM role, `<name_prefix>-ssm-support` (e.g. `ghost-agent-ssm-support`), that Ghost Security assumes to open an AWS Systems Manager Session Manager shell on the VM for support. Its trust is scoped to a single Ghost support role, so only that role can assume it. The role grants only `ssm:StartSession` on this one instance - an interactive shell, or a port-forward to reach the UI without opening any inbound ports - plus management of the operator's own sessions: no SSH key, no inbound ports, and no access to any other resource. The instance still dials out to the SSM service exactly as it does for your own `ssm_session_command`; nothing new is exposed to the internet.
 
 ```bash
 terraform output ssm_support_role_arn   # the role Ghost assumes (empty if disabled)

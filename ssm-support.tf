@@ -43,16 +43,21 @@ resource "aws_iam_role_policy" "ssm_support" {
     Version = "2012-10-17"
     Statement = [
       {
-        # Open a Session Manager shell on this instance only. StartSession
-        # is authorized against both the instance and the session
-        # document, so both are listed; SessionDocumentAccessCheck stops
-        # the instance scope from being bypassed with another document.
+        # Open a Session Manager shell on this instance, or forward a port
+        # on it (the port-forward document lets an operator reach the UI
+        # without any inbound ports). StartSession is authorized against
+        # the instance and each session document, so all are listed;
+        # SessionDocumentAccessCheck stops the instance scope from being
+        # bypassed with another document.
         Sid    = "StartSessionOnInstance"
         Effect = "Allow"
         Action = "ssm:StartSession"
         Resource = [
           "arn:aws:ec2:${local.aws_region}:${local.aws_account_id}:instance/${aws_instance.vm.id}",
           "arn:aws:ssm:${local.aws_region}:${local.aws_account_id}:document/SSM-SessionManagerRunShell",
+          # AWS-owned public documents carry no account ID in their ARN,
+          # unlike the account-scoped SSM-SessionManagerRunShell default.
+          "arn:aws:ssm:${local.aws_region}::document/AWS-StartPortForwardingSession",
         ]
         Condition = {
           BoolIfExists = {
