@@ -23,6 +23,11 @@ output "ssm_session_command" {
   value       = "aws ssm start-session --region ${local.aws_region} --target ${aws_instance.vm.id}"
 }
 
+output "ssm_support_role_arn" {
+  description = "ARN of the cross-account SSM support role Ghost Security assumes to open a Session Manager shell on the VM. Empty when ghost_support_access_enabled is false."
+  value       = local.ghost_support_enabled ? aws_iam_role.ssm_support[0].arn : ""
+}
+
 output "instance_id" {
   description = "EC2 instance ID. Useful for ops commands (SSM, EBS attach/detach, console output retrieval)."
   value       = aws_instance.vm.id
