@@ -2,7 +2,7 @@
 
 End-to-end deployment with a fresh network. Provisions a new VPC + public subnet + internet gateway, then deploys the Ghost Agent Platform module into them.
 
-Intended as a starting point — copy this directory and adapt for your environment. For production, pin the module `source` to a released tag (`source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.3>"`) and swap the example's VPC/subnet for the network the rest of your account uses.
+Intended as a starting point — copy this directory and adapt for your environment. For production, pin the module `source` to a released tag (`source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.5>"`) and swap the example's VPC/subnet for the network the rest of your account uses.
 
 ## Prerequisites
 
