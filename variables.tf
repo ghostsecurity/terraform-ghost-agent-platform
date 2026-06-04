@@ -89,9 +89,9 @@ variable "instance_type" {
 }
 
 variable "root_volume_size_gb" {
-  description = "Optional. Root EBS volume size in GB (OS + Docker image storage). 30 is the AL2023 AMI's snapshot size — EC2 rejects anything smaller. Each in-app upgrade leaves the prior release's images on disk for rollback; a daily prune timer cleans them up after 30 days. The 50 GB default keeps a comfortable buffer between current/previous tags and the prune deadline."
+  description = "Optional. Root EBS volume size in GB (OS + Docker image storage). 30 is the AL2023 AMI's snapshot size — EC2 rejects anything smaller. Each in-app upgrade leaves the prior release's images on disk for rollback; a daily prune timer cleans them up after 30 days. The 100 GB default keeps a comfortable buffer between current/previous tags and the prune deadline."
   type        = number
-  default     = 50
+  default     = 100
 
   validation {
     condition     = var.root_volume_size_gb >= 30
@@ -124,6 +124,16 @@ variable "ssh_key_name" {
   description = "Optional. Name of an existing EC2 key pair to attach to the instance for SSH access. Leave empty (the default) to skip key-pair attachment entirely — AWS Systems Manager Session Manager is available without a key pair (the instance role grants SSM access and cloud-init installs the SSM agent). When this is empty, var.admin_cidr still controls the SSH security-group rule but has no auth-capable target behind it; set ssh_key_name to a real EC2 key pair name to make SSH usable."
   type        = string
   default     = ""
+}
+
+# ----------------------------------------------------------------------
+# Optional: Ghost support access (cross-account SSM)
+# ----------------------------------------------------------------------
+
+variable "ghost_support_access_enabled" {
+  description = "Optional. When true (the default), this module publishes a `<prefix>-ssm-support` IAM role that Ghost Security can assume from its own AWS account to open an AWS Systems Manager Session Manager shell on the VM for support. The role grants only `ssm:StartSession` on this one instance — no SSH key, no inbound ports, no other AWS access. Set to false to remove the role entirely and disable Ghost support access."
+  type        = bool
+  default     = true
 }
 
 # ----------------------------------------------------------------------
