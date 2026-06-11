@@ -52,6 +52,16 @@ COSIGN_SHA256=c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
 COMPOSE_VERSION=v5.1.3
 COMPOSE_SHA256=a0298760c9772d2c06888fc8703a487c94c3c3b0134adeef830742a2fc7647b4
 
+# Docker is pinned (not "latest") and version-locked below. AL2023's docker
+# 25.0.16 has a libnetwork regression: it fails to attach a container to
+# multiple bridge networks when one is `internal: true`, erroring with
+# "cannot program address ... conflicts with existing route 0.0.0.0/0".
+# That breaks the credential-proxy and gateway, which both sit on the
+# internal + database + external networks. 25.0.14 is the last good build.
+# Bump this once a fixed docker lands in the AL2023 repo (verify the proxy
+# comes up on its 3 networks), then update the versionlock accordingly.
+DOCKER_VERSION=25.0.14-1.amzn2023.0.6
+
 DATA_DIR=/var/lib/exo
 OPT_DIR=/opt/exo
 
@@ -126,8 +136,12 @@ fi
 echo "===> Installing system packages"
 # amazon-ssm-agent is installed explicitly: AL2023 AMIs are inconsistent
 # about including it preinstalled. Without it, SSM Session Manager
-# access (the alternative to SSH) doesn't work.
-dnf install -y docker jq amazon-ssm-agent
+# access (the alternative to SSH) doesn't work. docker is pinned to
+# DOCKER_VERSION and then version-locked (see the versions block above)
+# so a later `dnf upgrade` or unattended patch can't bump it back to a
+# libnetwork-broken build.
+dnf install -y "docker-$${DOCKER_VERSION}" jq amazon-ssm-agent python3-dnf-plugin-versionlock
+dnf versionlock add docker
 
 # Daemon-wide log rotation. Without this, the json-file driver
 # accumulates container stdout/stderr under /var/lib/docker/containers/*/
@@ -262,8 +276,23 @@ WORKER_GID=$(docker run --rm --entrypoint id "$${IMAGE_REGISTRY}/exo-worker:$${I
 echo "       worker uid:gid = $${WORKER_UID}:$${WORKER_GID}"
 
 chown -R 999:999 "$${DATA_DIR}/mongo-data"
-chown -R "$${WORKER_UID}:$${WORKER_GID}" "$${DATA_DIR}/artifacts" "$${DATA_DIR}/runner-identity"
+chown -R "$${WORKER_UID}:$${WORKER_GID}" "$${DATA_DIR}/runner-identity"
+# Artifacts is shared read-write between the gateway (runs as 65532:65532)
+# and the worker (agent user, a supplementary member of gid 65532). Group
+# 65532 + setgid (2775) makes files written by either side inherit group
+# 65532 and stay mutually readable.
+chown -R 65532:65532 "$${DATA_DIR}/artifacts"
+chmod 2775 "$${DATA_DIR}/artifacts"
+# TLS dirs are owned by 65532 — the credential-proxy (writer) and the
+# gateway (reader) both run as that UID. The updater also reads tls but
+# runs as root (see exo-updater user: "0:0"), so it reads via root's
+# permission bypass. tls stays 0700 (holds private keys); tls-public is
+# left world-readable (the worker reads ca.crt from it).
+chown -R 65532:65532 "$${DATA_DIR}/tls" "$${DATA_DIR}/tls-public"
 chmod 0700 "$${DATA_DIR}/tls"
+# The ui-extract oneshot runs as the nginx-unprivileged UID 101 and writes
+# the static bundle into this bind mount.
+chown -R 101:101 "$${DATA_DIR}/ui"
 
 # Worker /etc/resolv.conf. Bind-mounted into the worker container to
 # bypass Docker's embedded DNS resolver, which on user-defined
@@ -346,9 +375,7 @@ CONFIG_TPL_EOF
 # replacement is safe.
 sed \
   -e "s|@@DOMAIN@@|$${BRINGUP_DOMAIN}|g" \
-  -e "s|@@JWT_SECRET@@|$${JWT_SECRET}|g" \
   -e "s|@@SEED_ADMIN_EMAIL@@|$${SEED_ADMIN_EMAIL}|g" \
-  -e "s|@@SEED_ADMIN_PASSWORD@@|$${SEED_ADMIN_PASSWORD}|g" \
   -e "s|@@IMAGE_REGISTRY_REGION@@|$${IMAGE_REGISTRY_REGION}|g" \
   -e "s|@@IMAGE_REGISTRY_ACCOUNT_ID@@|$${IMAGE_REGISTRY_ACCOUNT_ID}|g" \
   /tmp/config.toml.tpl > "$${OPT_DIR}/config.toml"
@@ -368,12 +395,23 @@ TAG=$${IMAGE_TAG}
 UPDATER_TAG=$${IMAGE_TAG}
 WORKER_REPLICAS=$${WORKER_REPLICAS}
 ENCRYPTION_KEY=$${ENCRYPTION_KEY}
+# Gateway secrets supplied via env (not config.toml) so config.toml stays
+# non-secret and the non-root gateway can read it. config.Load prefers
+# these over the (blank) config.toml values.
+EXO_JWT_SECRET=$${JWT_SECRET}
+EXO_SEED_ADMIN_PASSWORD=$${SEED_ADMIN_PASSWORD}
 SLACK_APP_TOKEN=$${SLACK_APP_TOKEN}
 SLACK_BOT_TOKEN=$${SLACK_BOT_TOKEN}
 SLACK_SIGNING_SECRET=$${SLACK_SIGNING_SECRET}
 EOF
+# config.toml and config.proxy.toml now carry no secrets (gateway secrets
+# come from .env via the compose environment), so they can be world-readable
+# for the non-root gateway + credential-proxy (UID 65532) reading them from
+# bind mounts. .env holds the secrets and stays root-only 0600 — only the
+# host's `docker compose` (which injects them as env) and the root updater
+# read it.
+chmod 0644 "$${OPT_DIR}/config.toml" "$${OPT_DIR}/config.proxy.toml"
 chmod 0600 "$${OPT_DIR}/.env"
-chmod 0600 "$${OPT_DIR}/config.toml"
 
 # ----------------------------------------------------------------------
 # 7. Verify image signatures with cosign
