@@ -30,6 +30,40 @@
 #   sudo docker compose -f docker-compose.prod.yml up -d
 
 services:
+  # Oneshot that normalizes ownership on the shared TLS + artifacts
+  # bind mounts before any long-running service mounts them, then exits
+  # (`restart: "no"`). Cloud-init already chowns these dirs on the EBS
+  # data volume at instance provisioning, but it does NOT re-run on the
+  # default in-place upgrade path (the in-stack updater's `up -d`). So an
+  # instance provisioned before the non-root images keeps root-owned
+  # /var/lib/exo/{tls,artifacts} and would break when bumped to images
+  # that run as UID 65532. This root oneshot re-asserts ownership on every
+  # `up -d`; on a freshly provisioned host it's a no-op. Mirrors the
+  # ui-extract oneshot pattern - the long-running service images stay
+  # non-root.
+  #   tls         private keys, 0700, read by gateway + proxy + updater
+  #   tls-public  world-readable (0755) - worker reads ca.crt as its agent user
+  #   artifacts   2775 setgid so files written by the gateway (65532) and
+  #               the worker's agent user (supplementary member of gid 65532)
+  #               stay mutually readable
+  volume-init:
+    image: busybox
+    user: "0:0"
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        chown -R 65532:65532 /tls /tls-public /artifacts
+        chmod 0700 /tls
+        chmod 0755 /tls-public
+        chmod 2775 /artifacts
+    volumes:
+      - /var/lib/exo/tls:/tls
+      - /var/lib/exo/tls-public:/tls-public
+      - /var/lib/exo/artifacts:/artifacts
+
   gateway:
     image: ${REGISTRY}/exo-server:${TAG}
     restart: unless-stopped
@@ -41,6 +75,10 @@ services:
       GOFIPS140: latest
       GODEBUG: fips140=on
       EXO_REQUIRE_FIPS: "true"
+      # Gateway secrets injected from /opt/exo/.env rather than config.toml,
+      # so config.toml stays non-secret and the non-root gateway can read it.
+      EXO_JWT_SECRET: ${EXO_JWT_SECRET:?EXO_JWT_SECRET must be set in /opt/exo/.env}
+      EXO_SEED_ADMIN_PASSWORD: ${EXO_SEED_ADMIN_PASSWORD:?EXO_SEED_ADMIN_PASSWORD must be set in /opt/exo/.env}
       # Channel connectors. Sourced from /opt/exo/.env (which cloud-init
       # populates from AWS Secrets Manager). Empty defaults so a missing
       # secret doesn't break compose substitution.
@@ -66,6 +104,8 @@ services:
       database:
       external:
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       database:
         condition: service_healthy
       credential-proxy:
@@ -79,6 +119,11 @@ services:
     image: ${REGISTRY}/exo-credential-proxy:${TAG}
     restart: unless-stopped
     command: [ "-config", "/etc/exo/config.proxy.toml" ]
+    # The proxy runs as the non-root UID 65532 but binds the privileged
+    # ports :443 (MITM) and :53 (DNS). Lowering the unprivileged-port floor
+    # to 0 lets it bind them without CAP_NET_BIND_SERVICE or root.
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=0
     environment:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in /opt/exo/.env}
       GOFIPS140: latest
@@ -96,6 +141,8 @@ services:
       database:
       external:
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       database:
         condition: service_healthy
 
@@ -160,6 +207,8 @@ services:
     networks:
       - internal
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       gateway:
         condition: service_started
       credential-proxy:
@@ -181,6 +230,11 @@ services:
     image: ${REGISTRY}/exo-updater:${UPDATER_TAG:-${TAG}}
     restart: unless-stopped
     command: [ "-config", "/etc/exo/config.toml" ]
+    # The image ships a non-root default user, but this container holds the
+    # host docker socket - which is root-equivalent (it can launch a
+    # privileged container) - so running the process as non-root buys no
+    # real isolation.
+    user: "0:0"
     environment:
       GOFIPS140: latest
       GODEBUG: fips140=on
@@ -280,5 +334,16 @@ networks:
         - subnet: 172.28.0.0/24
   database:
     driver: bridge
+    # Mongo is the only service solely on this network and needs no internet
+    # egress, so isolate it (defense in depth). gateway + credential-proxy
+    # keep their egress via the `external` network. (Subnet auto-allocated;
+    # only `internal` needs a fixed subnet, for the proxy/gateway static IPs.)
+    internal: true
   external:
     driver: bridge
+  # The implicit default network - the volume-init + ui-extract oneshots
+  # declare no networks, so they land here. They need no egress, so isolate
+  # it too.
+  default:
+    driver: bridge
+    internal: true

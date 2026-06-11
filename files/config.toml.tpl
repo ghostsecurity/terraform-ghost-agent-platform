@@ -15,7 +15,10 @@ mongo_uri = "mongodb://database:27017/?replicaSet=rs0&directConnection=true"
 mongo_database = "exo"
 
 [auth]
-jwt_secret = "@@JWT_SECRET@@"
+# Supplied at runtime via EXO_JWT_SECRET (see .env / docker-compose) so
+# this file carries no secrets and can stay world-readable for the
+# non-root gateway. Left blank here intentionally.
+jwt_secret = ""
 issuer = "exo-api"
 audience = "exo-ui"
 access_token_ttl = "1m"
@@ -91,4 +94,6 @@ cert_renew_before = "15m"
 
 [[seed.users]]
 email = "@@SEED_ADMIN_EMAIL@@"
-password = "@@SEED_ADMIN_PASSWORD@@"
+# Supplied at runtime via EXO_SEED_ADMIN_PASSWORD (see .env /
+# docker-compose). Left blank here so this file carries no secrets.
+password = ""
