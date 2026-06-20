@@ -72,7 +72,11 @@ ecr_region = "@@IMAGE_REGISTRY_REGION@@"
 # AccessDenied even when Ghost's cross-account repo policy is set
 # up correctly.
 ecr_registry_id = "@@IMAGE_REGISTRY_ACCOUNT_ID@@"
-ecr_repository = "exo-worker"
+# Repo the poller watches for new release tags. Points at exo-stack —
+# the compose bundle, published LAST in the release pipeline (after every
+# image). Its tag appearing is what makes a release fully upgradeable:
+# all images plus the bundle are then in the registry.
+ecr_repository = "exo-stack"
 poll_interval = "10m"
 env_file_path = "/opt/exo/.env"
 compose_file_path = "/opt/exo/docker-compose.prod.yml"
