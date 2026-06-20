@@ -96,8 +96,10 @@ self_service = "exo-updater"
 # identity, and converges the stack — so a release can add, remove, or
 # reconfigure containers.
 stack_repository = "exo-stack"
-stack_signing_identity_regex = "@@STACK_SIGNING_IDENTITY_REGEX@@"
-stack_signing_oidc_issuer = "@@STACK_SIGNING_OIDC_ISSUER@@"
+# Single-quoted (TOML literal strings) so the regex backslashes (`\.`)
+# are taken verbatim, not parsed as string escapes.
+stack_signing_identity_regex = '@@STACK_SIGNING_IDENTITY_REGEX@@'
+stack_signing_oidc_issuer = '@@STACK_SIGNING_OIDC_ISSUER@@'
 
 [[seed.users]]
 email = "@@SEED_ADMIN_EMAIL@@"

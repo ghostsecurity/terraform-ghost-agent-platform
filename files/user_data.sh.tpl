@@ -23,6 +23,10 @@ set -euo pipefail
 exec > >(tee -a /var/log/ghost-agent-bootstrap.log) 2>&1
 echo "===> Bootstrap starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# cloud-init runs with $HOME unset; oras requires it. Point it at root's
+# home, where the ECR docker login writes /root/.docker/config.json.
+export HOME=/root
+
 # ----------------------------------------------------------------------
 # Terraform-rendered constants
 # ----------------------------------------------------------------------
