@@ -1,10 +1,10 @@
 # terraform-ghost-agent-platform
 
-Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an AWS account. Provisions the VM, network, IAM, and AWS Secrets Manager entries, then bootstraps the stack via cloud-init - including signature verification of every published image before any container starts.
+Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an AWS account. Provisions the VM, network, IAM, and AWS Secrets Manager entries, then bootstraps the stack via cloud-init - including cosign signature verification of the stack definition and images before any container starts.
 
 ## What gets deployed
 
-- **1 EC2 instance** (`t3.large` by default, AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that handles UI-driven image bumps (see [Updating the deployment](#updating-the-deployment)).
+- **1 EC2 instance** (`t3.large` by default, AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that applies UI-driven upgrades (see [Updating the deployment](#updating-the-deployment)).
 - **1 EBS data volume** (100 GB gp3 by default) mounted at `/var/lib/exo` - holds the database, TLS material, run artifacts, and signing-cert state. Configured with `prevent_destroy = true` to guard against accidental teardown.
 - **1 Elastic IP** providing a stable public address.
 - **1 Security group** - SSH from `var.admin_cidr` only, HTTP/HTTPS from `var.public_ingress_cidrs` (default: world).
@@ -30,7 +30,7 @@ Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an 
 ```hcl
 module "ghost_agent" {
   # Pin to a released tag for reproducibility (omit ?ref=… to track main).
-  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.5>"
+  source = "github.com/ghostsecurity/terraform-ghost-agent-platform?ref=<latest release tag, e.g. v0.1.7>"
 
   # Provided by Ghost during onboarding
   image_registry = "012345678901.dkr.ecr.<region>.amazonaws.com"
@@ -115,15 +115,15 @@ Three paths, in order of operator overhead.
 
 ### In-app (preferred)
 
-A workspace admin opens the UI's workspace dropdown → System → Version. The page shows the running tag and (after a check-against-ECR) the latest available release. Clicking **Upgrade to vX.Y.Z** dispatches the bump to the in-stack updater container, which:
+A workspace admin opens the UI's workspace dropdown → System → Version. The page shows the running tag and (after a check-against-ECR) the latest available release. Clicking **Upgrade to vX.Y.Z** dispatches the upgrade to the in-stack updater container, which:
 
-1. Rewrites `TAG=` in `/opt/exo/.env`
-2. Runs `docker compose pull` for the managed services (gateway, credential-proxy, worker, ui)
-3. Runs `docker compose up -d` for the same set
+1. Fetches and `cosign verify`s the release's stack bundle — the `docker-compose` for that tag — from ECR
+2. Applies it to `/opt/exo` and rewrites `TAG=` in `/opt/exo/.env`
+3. Pulls the release's images and converges the stack (`docker compose up -d --remove-orphans`)
 
-The updater excludes itself from the dispatched `up -d` so it doesn't kill the container running the upgrade. Brief ~10-30s window during the gateway swap where the API may 502 - acceptable for a single-host deployment.
+Because the compose travels with the release, an upgrade can add, remove, or reconfigure containers — not only change image tags. The updater excludes itself from the converge so it doesn't kill the container running the upgrade. Brief ~10-30s window during the gateway swap where the API may 502 - acceptable for a single-host deployment.
 
-**Rollback** works the same way: the page also offers a one-click rollback to the prior tag, derived from the audit log of past upgrades.
+**Rollback** works the same way: the page offers a one-click rollback to the prior tag (derived from the audit log of past upgrades), fetching that tag's bundle so the topology reverts too.
 
 ### Out-of-band (operator SSH)
 
@@ -132,14 +132,18 @@ When the updater itself needs a version bump (it doesn't auto-update), or as bre
 ```bash
 $(terraform output -raw ssm_session_command)   # or ssh_command
 cd /opt/exo
-sudo sed -i 's/^TAG=.*/TAG=vNEW.TAG.HERE/' .env
-# To also bump the updater image (typically same tag, but pinned separately):
-sudo sed -i 's/^UPDATER_TAG=.*/UPDATER_TAG=vNEW.TAG.HERE/' .env
+sudo sed -i 's/^TAG=.*/TAG=vX.Y.Z/' .env
+# The updater image is pinned separately; bump it to the same tag too:
+sudo sed -i 's/^UPDATER_TAG=.*/UPDATER_TAG=vX.Y.Z/' .env
+# Fetch the stack bundle (the docker-compose) for the target tag so the
+# topology matches the release, then converge:
+REGISTRY=$(grep '^REGISTRY=' .env | cut -d= -f2)
+sudo oras pull "$REGISTRY/exo-stack:vX.Y.Z" -o /opt/exo
 sudo docker compose -f docker-compose.prod.yml pull
-sudo docker compose -f docker-compose.prod.yml up -d
+sudo docker compose -f docker-compose.prod.yml up -d --remove-orphans
 ```
 
-ECR repositories are configured with immutable tags so byte-identical reproduction is guaranteed.
+ECR repositories use immutable tags, so byte-identical reproduction is guaranteed.
 
 ### Terraform replace (heavier)
 
@@ -149,18 +153,18 @@ Force a clean instance recycle by tainting the EC2 resource:
 terraform apply -replace=module.ghost_agent.aws_instance.vm
 ```
 
-The instance is replaced, cloud-init re-runs end-to-end (including cosign verification), but the data EBS volume and secrets persist. Useful when AMI / cloud-init changes need to land alongside an image bump. Note: the `var.image_tag` value written to `.env` by cloud-init overrides whatever the running stack was on, so make sure `image_tag` in tfvars matches the version you want before triggering a replace.
+The instance is replaced, cloud-init re-runs end-to-end (including cosign verification), but the data EBS volume and secrets persist. Useful when AMI / cloud-init changes need to land alongside a version change. Note: the `var.image_tag` value written to `.env` by cloud-init overrides whatever the running stack was on, so make sure `image_tag` in tfvars matches the version you want before triggering a replace.
 
 ## Signature verification
 
-Every image is `cosign verify`'d against Ghost's published-workflow identity **before** any container starts. The verify policy is encoded in `var.image_signing_identity_regex` + `var.image_signing_oidc_issuer`. Defaults match the Ghost Security publish workflow on a v* tag:
+The stack bundle (the `docker-compose` for a release) and every service image are `cosign verify`'d against Ghost's published-workflow identity **before** they are applied or started — at first boot and on every in-app upgrade. The verify policy is encoded in `var.image_signing_identity_regex` + `var.image_signing_oidc_issuer`. Defaults match the Ghost Security publish workflow on a v* tag:
 
 ```
 identity-regexp: ^https://github\.com/ghostsecurity/exo/\.github/workflows/publish-to-ecr\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$
 oidc-issuer:     https://token.actions.githubusercontent.com
 ```
 
-If a tag's signature fails verification, cloud-init exits before `docker compose up`. Cosign and the workflow signer are pinned in lockstep on both sides - Ghost's publish workflow signs with `cosign-installer@v4.1.2` (cosign v3.0.6), and the cloud-init verify uses the same version.
+If a signature fails verification, cloud-init exits before `docker compose up` (and an in-app upgrade aborts before touching the stack). Cosign and the workflow signer are pinned in lockstep on both sides - Ghost's publish workflow signs with `cosign-installer@v4.1.2` (cosign v3.0.6), and the cloud-init verify uses the same version.
 
 ## Troubleshooting
 

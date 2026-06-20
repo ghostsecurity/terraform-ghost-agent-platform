@@ -51,10 +51,12 @@ locals {
   ghost_account_id = local.registry_parts[0]
   ghost_region     = local.registry_parts[3]
 
-  # ECR repo ARNs for the five images the EC2 needs to pull. Used by
-  # the IAM policy in iam.tf.
+  # ECR repo ARNs the EC2 needs to pull: the five service images plus
+  # exo-stack, the cosign-signed compose/config "stack bundle" the
+  # in-stack updater fetches (via oras) and verifies (via cosign) to
+  # converge the topology on upgrade. Used by the IAM policy in iam.tf.
   ghost_ecr_repo_arns = [
-    for img in ["exo-server", "exo-credential-proxy", "exo-worker", "exo-ui", "exo-updater"] :
+    for img in ["exo-server", "exo-credential-proxy", "exo-worker", "exo-ui", "exo-updater", "exo-stack"] :
     "arn:aws:ecr:${local.ghost_region}:${local.ghost_account_id}:repository/${img}"
   ]
 

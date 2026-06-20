@@ -3,12 +3,13 @@
 #
 # Runs once on first boot. Bring-up flow:
 #   1. Mount the data EBS volume at /var/lib/exo
-#   2. Install Docker, compose plugin, jq, cosign
+#   2. Install Docker, compose plugin, jq, cosign, oras
 #   3. Create the on-VM directory layout under /var/lib/exo
 #   4. Log in to ECR + install an hourly re-login timer
 #   5. Fetch secrets from AWS Secrets Manager
-#   6. Render configs to /opt/exo/ (compose, Caddyfile, gateway +
-#      proxy TOMLs, .env)
+#   6. cosign-verify + oras-fetch the stack bundle (compose) and render
+#      the rest of the configs to /opt/exo/ (Caddyfile, gateway + proxy
+#      TOMLs, .env)
 #   7. cosign verify each image against the configured identity policy
 #   8. docker compose pull + up -d
 #   9. Install a systemd unit so the stack auto-restarts after reboot
@@ -21,6 +22,10 @@
 set -euo pipefail
 exec > >(tee -a /var/log/ghost-agent-bootstrap.log) 2>&1
 echo "===> Bootstrap starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# cloud-init runs with $HOME unset; oras requires it. Point it at root's
+# home, where the ECR docker login writes /root/.docker/config.json.
+export HOME=/root
 
 # ----------------------------------------------------------------------
 # Terraform-rendered constants
@@ -41,16 +46,19 @@ SECRET_ARN_SEED_PASSWORD='${secret_arn_seed_password}'
 SECRET_ARN_SLACK='${secret_arn_slack}'
 
 # Pinned tool versions + SHA256 sums of the release binaries. cosign is
-# locked to match the publish-side pin in
-# .github/workflows/publish-to-ecr.yml — bump both together or
-# verification breaks. SHAs come from the official checksums.txt at
-# each release; verify before use to close the GitHub-download trust
+# locked to the version that signs the published images — keep them in
+# step or verification breaks. SHAs come from the official checksums.txt
+# at each release; verify before use to close the GitHub-download trust
 # gap (a tampered cosign binary would defeat the image-signature
 # verification chain below).
 COSIGN_VERSION=v3.0.6
 COSIGN_SHA256=c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
 COMPOSE_VERSION=v5.1.3
 COMPOSE_SHA256=a0298760c9772d2c06888fc8703a487c94c3c3b0134adeef830742a2fc7647b4
+# oras pulls the signed stack bundle (the docker-compose) from ECR at
+# boot. Verified against the release's published checksums file (no SHA
+# to maintain here).
+ORAS_VERSION=1.2.3
 
 # Docker is pinned (not "latest") and version-locked below. AL2023's docker
 # 25.0.16 has a libnetwork regression: it fails to attach a container to
@@ -179,6 +187,20 @@ curl -fsSL "https://github.com/sigstore/cosign/releases/download/$${COSIGN_VERSI
   -o /usr/local/bin/cosign
 echo "$${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c -
 chmod +x /usr/local/bin/cosign
+
+echo "===> Installing oras v$${ORAS_VERSION}"
+# Download the tarball + its checksums file under their canonical names
+# (so `sha256sum -c` finds the artifact), verify, then extract the oras
+# binary. Subshell keeps the cd contained; strict mode aborts on any
+# download/checksum failure.
+ORAS_TMP=$(mktemp -d)
+( cd "$${ORAS_TMP}"
+  curl -fsSL -O "https://github.com/oras-project/oras/releases/download/v$${ORAS_VERSION}/oras_$${ORAS_VERSION}_linux_amd64.tar.gz"
+  curl -fsSL -O "https://github.com/oras-project/oras/releases/download/v$${ORAS_VERSION}/oras_$${ORAS_VERSION}_checksums.txt"
+  grep " oras_$${ORAS_VERSION}_linux_amd64.tar.gz$" "oras_$${ORAS_VERSION}_checksums.txt" | sha256sum -c -
+  tar -xzf "oras_$${ORAS_VERSION}_linux_amd64.tar.gz" -C /usr/local/bin oras )
+chmod +x /usr/local/bin/oras
+rm -rf "$${ORAS_TMP}"
 
 # ----------------------------------------------------------------------
 # 3. ECR login + hourly re-login timer (tokens expire every 12h)
@@ -340,18 +362,24 @@ SLACK_BOT_TOKEN=$(echo "$${SLACK_JSON}" | jq -r '.bot_token // ""')
 SLACK_SIGNING_SECRET=$(echo "$${SLACK_JSON}" | jq -r '.signing_secret // ""')
 
 # ----------------------------------------------------------------------
-# 6. Write configs to /opt/exo/
+# 6. Fetch the stack bundle + write configs to /opt/exo/
 # ----------------------------------------------------------------------
 echo "===> Writing configs to $${OPT_DIR}"
 mkdir -p "$${OPT_DIR}"
 
-# docker-compose.prod.yml — verbatim copy of the file rendered into
-# this script by terraform. Quoted heredoc keeps bash from
-# interpreting the $${REGISTRY} / $${TAG} substitutions in the YAML;
-# docker compose resolves those itself when it reads .env below.
-cat >"$${OPT_DIR}/docker-compose.prod.yml" <<'COMPOSE_EOF'
-${docker_compose_yml}
-COMPOSE_EOF
+# docker-compose.prod.yml — fetched from the signed stack bundle in ECR
+# (not baked into this script), so the compose topology travels with the
+# release and stays the single source of truth the in-stack updater also
+# pulls. cosign-verify against the publish-workflow identity BEFORE
+# pulling, then oras-pull into /opt/exo. The bundle's file is named
+# docker-compose.prod.yml (matching config.toml's compose_file_path); the
+# ECR login above lets oras/cosign authenticate via /root/.docker/config.json.
+echo "===> Verifying + fetching stack bundle exo-stack:$${IMAGE_TAG}"
+cosign verify "$${IMAGE_REGISTRY}/exo-stack:$${IMAGE_TAG}" \
+  --certificate-oidc-issuer="$${SIGN_OIDC_ISSUER}" \
+  --certificate-identity-regexp="$${SIGN_IDENTITY_REGEX}" \
+  >/dev/null
+oras pull "$${IMAGE_REGISTRY}/exo-stack:$${IMAGE_TAG}" -o "$${OPT_DIR}"
 
 # Caddyfile — already rendered with the bring-up domain and admin
 # email at TF apply time, so this is fully baked content.
@@ -370,14 +398,22 @@ cat >/tmp/config.toml.tpl <<'CONFIG_TPL_EOF'
 ${config_toml_template}
 CONFIG_TPL_EOF
 
+# The stack-signing identity regex contains backslashes (\.) and the
+# `|` sed delimiter is meaningful, so escape both values for use as sed
+# REPLACEMENT text (escape `\`, then `|`, then `&`).
+SIGN_IDENTITY_REGEX_SED=$(printf '%s' "$${SIGN_IDENTITY_REGEX}" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/&/\\&/g')
+SIGN_OIDC_ISSUER_SED=$(printf '%s' "$${SIGN_OIDC_ISSUER}" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/&/\\&/g')
+
 # `|` delimiter on sed to avoid collisions with `/` in any value.
 # The chosen random_password special chars exclude `&` and `\` so
-# replacement is safe.
+# replacement is safe; the signing values are pre-escaped above.
 sed \
   -e "s|@@DOMAIN@@|$${BRINGUP_DOMAIN}|g" \
   -e "s|@@SEED_ADMIN_EMAIL@@|$${SEED_ADMIN_EMAIL}|g" \
   -e "s|@@IMAGE_REGISTRY_REGION@@|$${IMAGE_REGISTRY_REGION}|g" \
   -e "s|@@IMAGE_REGISTRY_ACCOUNT_ID@@|$${IMAGE_REGISTRY_ACCOUNT_ID}|g" \
+  -e "s|@@STACK_SIGNING_IDENTITY_REGEX@@|$${SIGN_IDENTITY_REGEX_SED}|g" \
+  -e "s|@@STACK_SIGNING_OIDC_ISSUER@@|$${SIGN_OIDC_ISSUER_SED}|g" \
   /tmp/config.toml.tpl > "$${OPT_DIR}/config.toml"
 rm /tmp/config.toml.tpl
 

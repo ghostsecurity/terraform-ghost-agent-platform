@@ -106,7 +106,7 @@ variable "data_volume_size_gb" {
 }
 
 variable "worker_replicas" {
-  description = "Optional. Number of worker containers (agent runners) to run on the VM. Default matches the dev compose. Per-worker CPU/RAM footprint depends on workflow shape; size up var.instance_type before pushing this high. Adjustable post-deploy without `terraform apply` — edit WORKER_REPLICAS in /opt/exo/.env and `docker compose up -d`."
+  description = "Optional. Number of worker containers (agent runners) to run on the VM. Defaults to 2. Per-worker CPU/RAM footprint depends on workflow shape; size up var.instance_type before pushing this high. Adjustable post-deploy without `terraform apply` — edit WORKER_REPLICAS in /opt/exo/.env and `docker compose up -d`."
   type        = number
   default     = 2
 

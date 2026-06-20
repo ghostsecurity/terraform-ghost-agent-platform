@@ -72,25 +72,34 @@ ecr_region = "@@IMAGE_REGISTRY_REGION@@"
 # AccessDenied even when Ghost's cross-account repo policy is set
 # up correctly.
 ecr_registry_id = "@@IMAGE_REGISTRY_ACCOUNT_ID@@"
-ecr_repository = "exo-worker"
+# Repo the poller watches for new release tags. Points at exo-stack —
+# the compose bundle, published LAST in the release pipeline (after every
+# image). Its tag appearing is what makes a release fully upgradeable:
+# all images plus the bundle are then in the registry.
+ecr_repository = "exo-stack"
 poll_interval = "10m"
 env_file_path = "/opt/exo/.env"
 compose_file_path = "/opt/exo/docker-compose.prod.yml"
-# managed_services intentionally excludes "exo-updater" — every
-# service shares the same TAG, so an unscoped `up -d` would recreate
-# the updater container mid-flight and orphan the in-progress
-# dispatch. Bumping the updater image is operator-driven (see the
-# header comment in docker-compose.prod.yml).
-#
-# "ui-extract" (not "ui") is the right service name: the UI bundle
-# lands on disk via a oneshot copy-out container of the same name;
-# Caddy serves the static files from that bind mount. Caddy and the
-# database are pinned to fixed upstream images so they're also
-# excluded.
-managed_services = ["gateway", "credential-proxy", "worker", "ui-extract"]
 cert_dir = "/var/lib/exo/tls"
 cert_ttl = "1h"
 cert_renew_before = "15m"
+
+# self_service is the updater's OWN compose service name. Topology
+# convergence (below) brings up every service in a stack bundle EXCEPT
+# this one — recreating the updater would kill the process running the
+# upgrade. Always correct to set; only consulted when stack delivery
+# is enabled.
+self_service = "exo-updater"
+
+# Stack delivery: an upgrade fetches the cosign-signed compose bundle
+# `${REGISTRY}/exo-stack:<tag>`, verifies it against the image-signing
+# identity, and converges the stack — so a release can add, remove, or
+# reconfigure containers.
+stack_repository = "exo-stack"
+# Single-quoted (TOML literal strings) so the regex backslashes (`\.`)
+# are taken verbatim, not parsed as string escapes.
+stack_signing_identity_regex = '@@STACK_SIGNING_IDENTITY_REGEX@@'
+stack_signing_oidc_issuer = '@@STACK_SIGNING_OIDC_ISSUER@@'
 
 [[seed.users]]
 email = "@@SEED_ADMIN_EMAIL@@"
