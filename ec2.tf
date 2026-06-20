@@ -51,8 +51,9 @@ resource "aws_instance" "vm" {
 
     # On-VM static artifacts. Cloud-init writes these to /opt/exo/.
     # config.toml is the only template rendered at boot time (after
-    # secrets are fetched); the rest are inert.
-    docker_compose_yml = file("${path.module}/files/docker-compose.prod.yml")
+    # secrets are fetched); the rest are inert. The docker-compose is NOT
+    # here — cloud-init oras-pulls the signed exo-stack bundle at boot
+    # (see user_data.sh.tpl).
     caddyfile = templatefile("${path.module}/files/Caddyfile.tpl", {
       domain      = local.bringup_domain
       admin_email = var.seed_admin_email

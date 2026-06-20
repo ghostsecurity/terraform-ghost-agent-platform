@@ -54,10 +54,9 @@ resource "aws_iam_role_policy" "vm_runtime" {
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage",
-          # DescribeImages is what the exo-updater binary calls to
-          # enumerate release tags for the UI's "Check for updates"
-          # button. The docker daemon doesn't need it for pulls;
-          # only the updater's AWS-SDK ListTags path does.
+          # DescribeImages lets the updater enumerate release tags for
+          # the UI's "Check for updates" button — the docker daemon
+          # doesn't need it for image pulls.
           "ecr:DescribeImages",
         ]
         Resource = local.ghost_ecr_repo_arns
