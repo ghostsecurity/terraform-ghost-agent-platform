@@ -33,6 +33,11 @@ output "instance_id" {
   value       = aws_instance.vm.id
 }
 
+output "data_volume_snapshot_policy_arn" {
+  description = "ARN of the Data Lifecycle Manager policy taking scheduled snapshots of the data volume. Empty when enable_data_volume_snapshots is false."
+  value       = var.enable_data_volume_snapshots ? aws_dlm_lifecycle_policy.data[0].arn : ""
+}
+
 output "secret_arns" {
   description = "ARNs of the Secrets Manager secrets created by this module. The seed admin password in particular is auto-generated — retrieve it via `aws secretsmanager get-secret-value --secret-id <arn>` for first login."
   value = {
