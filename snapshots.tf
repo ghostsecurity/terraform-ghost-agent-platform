@@ -55,7 +55,7 @@ resource "aws_dlm_lifecycle_policy" "data" {
       create_rule {
         interval      = 24
         interval_unit = "HOURS"
-        times         = ["14:00"] # TODO: revert to 03:00
+        times         = ["03:00"]
       }
 
       retain_rule {
