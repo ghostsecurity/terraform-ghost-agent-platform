@@ -153,6 +153,22 @@ variable "image_signing_oidc_issuer" {
 }
 
 # ----------------------------------------------------------------------
+# Optional: data volume snapshots (disaster recovery)
+# ----------------------------------------------------------------------
+
+variable "enable_data_volume_snapshots" {
+  description = "Optional. When true, create a Data Lifecycle Manager (DLM) policy that takes daily EBS snapshots of the data volume for disaster recovery, plus the DLM service role it runs as. Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "data_volume_snapshot_retention_days" {
+  description = "Optional. Number of daily snapshots to retain when enable_data_volume_snapshots is true."
+  type        = number
+  default     = 30
+}
+
+# ----------------------------------------------------------------------
 # Optional: meta
 # ----------------------------------------------------------------------
 

@@ -90,7 +90,12 @@ resource "aws_ebs_volume" "data" {
   type              = "gp3"
   encrypted         = true
 
-  tags = merge(local.common_tags, { Name = "${local.name}-data" })
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.name}-data" },
+    # Targeted by the optional DLM snapshot policy (see snapshots.tf).
+    var.enable_data_volume_snapshots ? { "exo:snapshot-group" = local.name } : {},
+  )
 
   lifecycle {
     # Extra guard against accidental `terraform destroy`. Removing this

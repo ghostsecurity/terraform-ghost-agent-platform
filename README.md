@@ -195,9 +195,93 @@ The EBS data volume at `/var/lib/exo` holds **all survival-critical state**:
 - `runner-identity/` - per-runner client certs and slot locks.
 - `artifacts/` - run output (recoverable, but loss is a regression).
 
-The module sets `prevent_destroy = true` on this volume to guard against `terraform destroy`. Recommended additional posture for production:
+The module sets `prevent_destroy = true` on this volume to guard against `terraform destroy`. That protects against accidental teardown, but not against data corruption, an accidental delete inside the VM, or loss of the availability zone - so production deployments should add scheduled snapshots.
 
-- Enable **EBS snapshot lifecycle policy** for daily snapshots with 30-day retention.
+### Scheduled snapshots
+
+Set `enable_data_volume_snapshots = true` and the module creates a Data Lifecycle Manager (DLM) policy that takes a daily snapshot of the data volume, retaining `data_volume_snapshot_retention_days` (30 by default), plus the DLM service role it runs as. The policy targets this deployment's volume by a dedicated tag, so it does not touch any other volume in the account.
+
+```hcl
+module "ghost_agent" {
+  # ...
+  enable_data_volume_snapshots        = true
+  data_volume_snapshot_retention_days = 30
+}
+```
+
+For a centralized backup policy across many resources, leave this off and target the data volume (tagged `Name = "<deployment-name>-data"`) from your own AWS Backup plan instead.
+
+EBS snapshots are crash-consistent, and MongoDB recovers a crash-consistent snapshot on startup via its journal. For an application-quiesced snapshot, stop the stack first (`sudo docker compose -f /opt/exo/docker-compose.prod.yml down`), snapshot, then bring it back up.
+
+### Restoring from a snapshot
+
+Restore swaps the data volume for a fresh one created from a snapshot, then reconciles Terraform state so the module adopts it. The instance keeps its Elastic IP (the URL is unchanged), and the restored volume auto-mounts on boot - the `/etc/fstab` entry matches by filesystem UUID, which a snapshot preserves, so there's no manual remount.
+
+Run from the directory where the module is invoked. Set the region and deployment name, and pick a snapshot:
+
+```bash
+REGION=us-east-1
+NAME=ghost-agent            # var.name_prefix
+
+# instance_id is a module output (surface it at your root, as the examples
+# do); the data volume has no output, so look it up by its Name tag.
+INSTANCE_ID=$(terraform output -raw instance_id)
+OLD_VOL=$(aws ec2 describe-volumes --region "$REGION" \
+  --filters "Name=tag:Name,Values=${NAME}-data" --query 'Volumes[0].VolumeId' --output text)
+AZ=$(aws ec2 describe-volumes --region "$REGION" --volume-ids "$OLD_VOL" \
+  --query 'Volumes[0].AvailabilityZone' --output text)
+
+aws ec2 describe-snapshots --region "$REGION" --owner-ids self \
+  --filters "Name=volume-id,Values=${OLD_VOL}" \
+  --query 'reverse(sort_by(Snapshots,&StartTime))[].{Id:SnapshotId,Started:StartTime,State:State}' --output table
+SNAP=snap-xxxx             # a State=completed snapshot from the list
+```
+
+Stop the instance (for a clean detach), swap the volume, and start it again:
+
+```bash
+aws ec2 stop-instances --region "$REGION" --instance-ids "$INSTANCE_ID"
+aws ec2 wait instance-stopped --region "$REGION" --instance-ids "$INSTANCE_ID"
+
+aws ec2 detach-volume --region "$REGION" --volume-id "$OLD_VOL"
+aws ec2 wait volume-available --region "$REGION" --volume-ids "$OLD_VOL"
+
+NEW_VOL=$(aws ec2 create-volume --region "$REGION" --snapshot-id "$SNAP" \
+  --availability-zone "$AZ" --volume-type gp3 \
+  --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=${NAME}-data},{Key=exo:snapshot-group,Value=${NAME}},{Key=ManagedBy,Value=terraform-ghost-agent-platform},{Key=Component,Value=ghost-agent-platform}]" \
+  --query VolumeId --output text)
+aws ec2 wait volume-available --region "$REGION" --volume-ids "$NEW_VOL"
+
+aws ec2 attach-volume --region "$REGION" --volume-id "$NEW_VOL" --instance-id "$INSTANCE_ID" --device /dev/sdf
+aws ec2 wait volume-in-use --region "$REGION" --volume-ids "$NEW_VOL"
+
+aws ec2 start-instances --region "$REGION" --instance-ids "$INSTANCE_ID"
+aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
+```
+
+Reconcile Terraform state so the module manages the new volume instead of the old one (adjust `module.ghost_agent` to your module instance name):
+
+```bash
+terraform state rm 'module.ghost_agent.aws_volume_attachment.data' 'module.ghost_agent.aws_ebs_volume.data'
+terraform import 'module.ghost_agent.aws_ebs_volume.data' "$NEW_VOL"
+terraform import 'module.ghost_agent.aws_volume_attachment.data' "/dev/sdf:${NEW_VOL}:${INSTANCE_ID}"
+terraform plan   # expect no changes (benign tag drift at most)
+```
+
+Verify (via SSM: `mountpoint /var/lib/exo` is mounted and `docker compose -f /opt/exo/docker-compose.prod.yml ps` is healthy), then delete the old volume once you trust the restore:
+
+```bash
+aws ec2 delete-volume --region "$REGION" --volume-id "$OLD_VOL"
+```
+
+Two things to get right: the new volume must be in the instance's availability zone (handled above), and you must **reconcile Terraform state before the next `terraform apply`** - skip it and the apply re-attaches the old volume, reverting the restore. Keep the old volume until the restore is verified; it is your rollback.
+
+### Full recovery set
+
+The volume holds MongoDB and the TLS CA keys, but stored credentials in MongoDB are ciphertext that only `ENCRYPTION_KEY` (in AWS Secrets Manager) can decrypt. Within the same account that secret persists independently of the volume, so a same-account restore needs nothing more. To rebuild in a different account, also copy `ENCRYPTION_KEY` and `jwt-secret` from Secrets Manager: without `ENCRYPTION_KEY` every stored credential is unrecoverable, and without `jwt-secret` all active sessions are invalidated.
+
+Other notes:
+
 - Treat the volume ID as sensitive - anyone with `ec2:DescribeVolumes` can locate it.
 - For dev/test instances: temporarily set `prevent_destroy = false` (one-line module edit) before `terraform destroy`.
 
@@ -212,6 +296,7 @@ See [variables.tf](variables.tf) for the full input list. Most useful overrides:
 | `data_volume_size_gb` | Anticipate high workflow rate / artifact retention |
 | `public_ingress_cidrs` | Lock down 80/443 to a CDN/WAF origin (note: scoping 80 too tightly will break Let's Encrypt cert renewal) |
 | `ssh_key_name` | Use SSH instead of SSM Session Manager |
+| `enable_data_volume_snapshots` | Turn on daily DR snapshots of the data volume (with `data_volume_snapshot_retention_days`) |
 | `ghost_support_access_enabled` | Set false to remove the Ghost support role and disable cross-account SSM access |
 | `image_signing_identity_regex` | Ghost rotates the publish workflow path or pre-release tag pattern |
 
@@ -221,7 +306,7 @@ A few things this module does not enforce, but which any production deploy shoul
 
 - **Tighten `admin_cidr`** to an office IP or VPN egress range. The variable validates that the value is a CIDR, not that it's narrow.
 - **Use a remote Terraform backend** (S3 with KMS encryption). The module generates secrets via `random_*` resources, so their values live in state - local state on a laptop is not appropriate.
-- **Enable an EBS snapshot lifecycle policy** for the data volume. The volume holds all survival-critical state (see [Data persistence and recovery](#data-persistence-and-recovery)); `prevent_destroy` guards against accidental teardown but not against corruption or accidental file deletion inside the VM.
+- **Enable scheduled snapshots** of the data volume by setting `enable_data_volume_snapshots = true` (see [Data persistence and recovery](#data-persistence-and-recovery)). The volume holds all survival-critical state; `prevent_destroy` guards against accidental teardown but not against corruption or accidental file deletion inside the VM.
 - **Add CloudWatch alarms** on EC2 status checks and configure instance auto-recovery. A single-VM deployment has no built-in failover.
 
 ## License
