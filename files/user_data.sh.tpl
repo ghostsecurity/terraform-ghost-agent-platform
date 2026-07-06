@@ -286,7 +286,8 @@ mkdir -p \
   "$${DATA_DIR}/runner-identity" \
   "$${DATA_DIR}/caddy-data" \
   "$${DATA_DIR}/caddy-config" \
-  "$${DATA_DIR}/ui"
+  "$${DATA_DIR}/ui" \
+  "$${DATA_DIR}/log-shipping"
 
 # Container UID/GID for the bind mounts. Hardcoding the worker's UID
 # was brittle (depends on what `useradd` picks during image build), so
@@ -312,6 +313,12 @@ chmod 2775 "$${DATA_DIR}/artifacts"
 # left world-readable (the worker reads ca.crt from it).
 chown -R 65532:65532 "$${DATA_DIR}/tls" "$${DATA_DIR}/tls-public"
 chmod 0700 "$${DATA_DIR}/tls"
+# Log-forwarder shared dir: the credential-proxy (65532) renders the
+# Vector sink + credential here; the Vector sidecar reads it. The
+# volume-init oneshot re-chowns on every up, but seed it correctly here so
+# the first boot's proxy can write before that runs.
+chown -R 65532:65532 "$${DATA_DIR}/log-shipping"
+chmod 0750 "$${DATA_DIR}/log-shipping"
 # The ui-extract oneshot runs as the nginx-unprivileged UID 101 and writes
 # the static bundle into this bind mount.
 chown -R 101:101 "$${DATA_DIR}/ui"
