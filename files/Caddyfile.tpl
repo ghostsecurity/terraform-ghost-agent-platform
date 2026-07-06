@@ -10,6 +10,13 @@
 # configuration knob.
 
 {
+    # Disable the admin API (localhost:2019). The stack drives caddy
+    # entirely from this static Caddyfile and reloads via container
+    # recreation (the updater's converge), never the runtime admin
+    # API, so turning it off removes a full-reconfiguration endpoint
+    # from the container's attack surface.
+    admin off
+
     email ${admin_email}
 }
 
