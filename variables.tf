@@ -2,21 +2,6 @@
 # Required inputs
 # ----------------------------------------------------------------------
 
-variable "image_registry" {
-  description = "Container registry hosting the Ghost Agent Platform images, e.g. \"012345678901.dkr.ecr.<region, e.g. us-east-1>.amazonaws.com\". Provided by Ghost Security during onboarding. The AWS account running this module must be granted cross-account ECR pull access by Ghost before `terraform apply` succeeds."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com$", var.image_registry))
-    error_message = "image_registry must be an ECR registry URL of the form <12-digit-account>.dkr.ecr.<region>.amazonaws.com."
-  }
-}
-
-variable "image_tag" {
-  description = "Image tag to deploy (e.g. \"v1.0.0\"). Must exist in image_registry for every Ghost Agent Platform service image (gateway, credential-proxy, worker, ui, updater)."
-  type        = string
-}
-
 variable "subnet_id" {
   description = "Subnet to place the EC2 instance in. Must be a public subnet — Let's Encrypt's HTTP-01 challenge needs inbound HTTP from arbitrary internet IPs. The VPC + AZ are inferred from the subnet."
   type        = string
@@ -32,13 +17,29 @@ variable "admin_cidr" {
   }
 }
 
-variable "seed_admin_email" {
-  description = "Email for the initial admin user seeded into the app at first boot. The password is auto-generated and stored in AWS Secrets Manager (see the Secrets section of the README for retrieval)."
+# ----------------------------------------------------------------------
+# Optional: image source
+# ----------------------------------------------------------------------
+
+variable "image_registry" {
+  description = "Container registry hosting the Ghost Agent Platform images. Defaults to Ghost Security's ECR registry; override only for a mirror or staging registry. The AWS account running this module must be granted cross-account ECR pull access by Ghost before `terraform apply` succeeds."
   type        = string
+  default     = "052783882429.dkr.ecr.us-east-1.amazonaws.com"
 
   validation {
-    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.seed_admin_email))
-    error_message = "seed_admin_email must look like a valid email."
+    condition     = can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com$", var.image_registry))
+    error_message = "image_registry must be an ECR registry URL of the form <12-digit-account>.dkr.ecr.<region>.amazonaws.com."
+  }
+}
+
+variable "image_tag" {
+  description = "Release tag to deploy (e.g. \"v1.0.0\"). Empty (the default) resolves the newest published release at first boot, the same way the in-stack updater detects upgrades. Set a value only to pin the initial provision to a specific release; after first boot the running version is owned by the in-app upgrade flow either way."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.image_tag == "" || can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-.+)?$", var.image_tag))
+    error_message = "image_tag must be a release tag like v1.2.3 (or empty to resolve the newest release at boot)."
   }
 }
 

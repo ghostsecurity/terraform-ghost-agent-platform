@@ -1,5 +1,5 @@
 output "bringup_url" {
-  description = "Public URL of the deployment. Open this in a browser to reach the UI."
+  description = "Public URL of the deployment. Open this in a browser to run the setup wizard and enter the claim token from the `claim_token` output. Served with a real Let's Encrypt certificate for this hostname; only bare-IP access falls back to a self-signed certificate."
   value       = "https://${local.bringup_domain}"
 }
 
@@ -39,11 +39,15 @@ output "data_volume_snapshot_policy_arn" {
 }
 
 output "secret_arns" {
-  description = "ARNs of the Secrets Manager secrets created by this module. The seed admin password in particular is auto-generated — retrieve it via `aws secretsmanager get-secret-value --secret-id <arn>` for first login."
+  description = "ARNs of the Secrets Manager secrets created by this module."
   value = {
-    jwt_secret          = aws_secretsmanager_secret.jwt.arn
-    encryption_key      = aws_secretsmanager_secret.encryption_key.arn
-    seed_admin_password = aws_secretsmanager_secret.seed_admin_password.arn
-    slack               = aws_secretsmanager_secret.slack.arn
+    encryption_key = aws_secretsmanager_secret.encryption_key.arn
+    claim_token    = aws_secretsmanager_secret.claim_token.arn
   }
+}
+
+output "claim_token" {
+  description = "One-time claim token for the setup wizard. Open bringup_url, enter this token, and complete setup (admin account, domain, TLS). Inert once setup finishes. Retrieve with `terraform output -raw claim_token`."
+  value       = random_id.claim_token.hex
+  sensitive   = true
 }

@@ -6,13 +6,18 @@
 #   2. Install Docker, compose plugin, jq, cosign, oras
 #   3. Create the on-VM directory layout under /var/lib/exo
 #   4. Log in to ECR + install an hourly re-login timer
-#   5. Fetch secrets from AWS Secrets Manager
-#   6. cosign-verify + oras-fetch the stack bundle (compose) and render
-#      the rest of the configs to /opt/exo/ (Caddyfile, gateway + proxy
-#      TOMLs, .env)
+#   5. Fetch the encryption key + claim token from Secrets Manager
+#   6. cosign-verify + oras-fetch the stack bundle (compose + config
+#      defaults), copy the defaults into place, and write the minimal
+#      /opt/exo/.env
 #   7. cosign verify each image against the configured identity policy
 #   8. docker compose pull + up -d
 #   9. Install a systemd unit so the stack auto-restarts after reboot
+#
+# No config templating happens here: the bundle's static defaults boot
+# the stack in pre-setup mode, and the operator completes configuration
+# (admin account, domain, TLS) through the in-product setup wizard,
+# unlocked by the claim token surfaced via `terraform output claim_token`.
 #
 # All output streams to /var/log/ghost-agent-bootstrap.log (and also
 # the standard cloud-init log) for post-mortem inspection.
@@ -36,14 +41,11 @@ IMAGE_REGISTRY_REGION='${image_registry_region}'
 IMAGE_REGISTRY_ACCOUNT_ID='${image_registry_account_id}'
 IMAGE_TAG='${image_tag}'
 BRINGUP_DOMAIN='${bringup_domain}'
-SEED_ADMIN_EMAIL='${seed_admin_email}'
 WORKER_REPLICAS='${worker_replicas}'
 SIGN_IDENTITY_REGEX='${image_signing_identity_regex}'
 SIGN_OIDC_ISSUER='${image_signing_oidc_issuer}'
-SECRET_ARN_JWT='${secret_arn_jwt}'
 SECRET_ARN_ENCRYPTION_KEY='${secret_arn_encryption_key}'
-SECRET_ARN_SEED_PASSWORD='${secret_arn_seed_password}'
-SECRET_ARN_SLACK='${secret_arn_slack}'
+SECRET_ARN_CLAIM_TOKEN='${secret_arn_claim_token}'
 
 # Pinned tool versions + SHA256 sums of the release binaries. cosign is
 # locked to the version that signs the published images — keep them in
@@ -275,6 +277,30 @@ systemctl daemon-reload
 systemctl enable --now exo-docker-prune.timer
 
 # ----------------------------------------------------------------------
+# 3c. Resolve the release tag
+# ----------------------------------------------------------------------
+# With no pinned image_tag, deploy the newest published release — the
+# same semantics as the in-stack updater's poller. exo-stack is
+# published LAST in the release pipeline (after every image), so its
+# newest clean-semver tag is by definition a fully published release.
+if [[ -z "$${IMAGE_TAG}" ]]; then
+  echo "===> Resolving newest release tag from ECR"
+  IMAGE_TAG=$(aws ecr describe-images \
+    --region "$${IMAGE_REGISTRY_REGION}" \
+    --registry-id "$${IMAGE_REGISTRY_ACCOUNT_ID}" \
+    --repository-name exo-stack \
+    --query 'imageDetails[].imageTags[]' --output text \
+    | tr '[:space:]' '\n' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V | tail -1)
+  if [[ -z "$${IMAGE_TAG}" ]]; then
+    echo "ERROR: could not resolve a release tag from ECR (repository exo-stack)"
+    exit 1
+  fi
+fi
+echo "===> Deploying release $${IMAGE_TAG}"
+
+# ----------------------------------------------------------------------
 # 4. Create the on-VM directory layout under /var/lib/exo
 # ----------------------------------------------------------------------
 echo "===> Creating data subdirectories"
@@ -349,38 +375,37 @@ EOF
 chmod 0644 "$${DATA_DIR}/worker-resolv.conf"
 
 # ----------------------------------------------------------------------
-# 5. Fetch secrets from AWS Secrets Manager
+# 5. Fetch the encryption key + claim token from Secrets Manager
 # ----------------------------------------------------------------------
+# The only secrets the host delivers. The encryption key stays
+# Secrets-Manager-managed on AWS (env-first resolution in the
+# credential-proxy: the .env value always wins and is never written to
+# disk). The claim token unlocks the in-product setup wizard; the
+# platform stores only its hash and the token is inert once setup
+# completes. Everything else (JWT secret, admin account, connector
+# tokens) is platform-generated or wizard-configured.
 echo "===> Fetching secrets"
-JWT_SECRET=$(aws secretsmanager get-secret-value \
-  --region "$${AWS_REGION}" --secret-id "$${SECRET_ARN_JWT}" \
-  --query SecretString --output text)
 ENCRYPTION_KEY=$(aws secretsmanager get-secret-value \
   --region "$${AWS_REGION}" --secret-id "$${SECRET_ARN_ENCRYPTION_KEY}" \
   --query SecretString --output text)
-SEED_ADMIN_PASSWORD=$(aws secretsmanager get-secret-value \
-  --region "$${AWS_REGION}" --secret-id "$${SECRET_ARN_SEED_PASSWORD}" \
+CLAIM_TOKEN=$(aws secretsmanager get-secret-value \
+  --region "$${AWS_REGION}" --secret-id "$${SECRET_ARN_CLAIM_TOKEN}" \
   --query SecretString --output text)
-SLACK_JSON=$(aws secretsmanager get-secret-value \
-  --region "$${AWS_REGION}" --secret-id "$${SECRET_ARN_SLACK}" \
-  --query SecretString --output text)
-SLACK_APP_TOKEN=$(echo "$${SLACK_JSON}" | jq -r '.app_token // ""')
-SLACK_BOT_TOKEN=$(echo "$${SLACK_JSON}" | jq -r '.bot_token // ""')
-SLACK_SIGNING_SECRET=$(echo "$${SLACK_JSON}" | jq -r '.signing_secret // ""')
 
 # ----------------------------------------------------------------------
-# 6. Fetch the stack bundle + write configs to /opt/exo/
+# 6. Fetch the stack bundle + place configs in /opt/exo/
 # ----------------------------------------------------------------------
 echo "===> Writing configs to $${OPT_DIR}"
 mkdir -p "$${OPT_DIR}"
 
-# docker-compose.prod.yml — fetched from the signed stack bundle in ECR
-# (not baked into this script), so the compose topology travels with the
-# release and stays the single source of truth the in-stack updater also
-# pulls. cosign-verify against the publish-workflow identity BEFORE
-# pulling, then oras-pull into /opt/exo. The bundle's file is named
-# docker-compose.prod.yml (matching config.toml's compose_file_path); the
-# ECR login above lets oras/cosign authenticate via /root/.docker/config.json.
+# The signed stack bundle carries the compose topology
+# (docker-compose.prod.yml), the static config defaults (defaults/),
+# the Caddyfile templates the platform renders instance settings into
+# (templates/), and host helper scripts (scripts/) — all versioned with
+# the release, the same source of truth the in-stack updater pulls on
+# upgrades. cosign-verify against the publish-workflow identity BEFORE
+# pulling; the ECR login above lets oras/cosign authenticate via
+# /root/.docker/config.json.
 echo "===> Verifying + fetching stack bundle exo-stack:$${IMAGE_TAG}"
 cosign verify "$${IMAGE_REGISTRY}/exo-stack:$${IMAGE_TAG}" \
   --certificate-oidc-issuer="$${SIGN_OIDC_ISSUER}" \
@@ -388,72 +413,68 @@ cosign verify "$${IMAGE_REGISTRY}/exo-stack:$${IMAGE_TAG}" \
   >/dev/null
 oras pull "$${IMAGE_REGISTRY}/exo-stack:$${IMAGE_TAG}" -o "$${OPT_DIR}"
 
-# Caddyfile — already rendered with the bring-up domain and admin
-# email at TF apply time, so this is fully baked content.
-cat >"$${OPT_DIR}/Caddyfile" <<'CADDY_EOF'
-${caddyfile}
-CADDY_EOF
+for f in defaults/config.toml defaults/config.proxy.toml defaults/Caddyfile.bootstrap; do
+  if [[ ! -f "$${OPT_DIR}/$${f}" ]]; then
+    echo "ERROR: stack bundle is missing $${f} — the release predates the setup wizard; deploy a newer image_tag"
+    exit 1
+  fi
+done
 
-# config.proxy.toml — no template vars, write verbatim.
-cat >"$${OPT_DIR}/config.proxy.toml" <<'PROXY_EOF'
-${config_proxy_toml}
-PROXY_EOF
+# Copy the static defaults into place, if-absent only: nothing ever
+# overwrites the live copies (the platform rewrites the Caddyfile and
+# the managed .env lines itself when instance settings change). The
+# bootstrap Caddyfile serves the bring-up hostname (EXO_BRINGUP_DOMAIN
+# in .env) with a real Let's Encrypt cert, plus a self-signed catch-all
+# for bare-IP access, so the wizard is reachable before setup.
+cp -n "$${OPT_DIR}/defaults/config.toml" "$${OPT_DIR}/config.toml"
+cp -n "$${OPT_DIR}/defaults/config.proxy.toml" "$${OPT_DIR}/config.proxy.toml"
+cp -n "$${OPT_DIR}/defaults/Caddyfile.bootstrap" "$${OPT_DIR}/Caddyfile"
+# BYO-cert drop point; the platform writes operator-uploaded certs here
+# when custom TLS is selected in the wizard/settings.
+mkdir -p "$${OPT_DIR}/certs"
 
-# config.toml — has @@VAR@@ placeholders. Write the template, then
-# sed-substitute with the runtime-fetched values.
-cat >/tmp/config.toml.tpl <<'CONFIG_TPL_EOF'
-${config_toml_template}
-CONFIG_TPL_EOF
+# Claim-token reissue helper: rotates the token for an unclaimed
+# instance (lost/exposed before the wizard ran) without replacing the
+# instance.
+if [[ -f "$${OPT_DIR}/scripts/reissue-claim-token.sh" ]]; then
+  install -m 755 "$${OPT_DIR}/scripts/reissue-claim-token.sh" /usr/local/bin/exo-reissue-claim-token
+fi
 
-# The stack-signing identity regex contains backslashes (\.) and the
-# `|` sed delimiter is meaningful, so escape both values for use as sed
-# REPLACEMENT text (escape `\`, then `|`, then `&`).
-SIGN_IDENTITY_REGEX_SED=$(printf '%s' "$${SIGN_IDENTITY_REGEX}" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/&/\\&/g')
-SIGN_OIDC_ISSUER_SED=$(printf '%s' "$${SIGN_OIDC_ISSUER}" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/&/\\&/g')
-
-# `|` delimiter on sed to avoid collisions with `/` in any value.
-# The chosen random_password special chars exclude `&` and `\` so
-# replacement is safe; the signing values are pre-escaped above.
-sed \
-  -e "s|@@DOMAIN@@|$${BRINGUP_DOMAIN}|g" \
-  -e "s|@@SEED_ADMIN_EMAIL@@|$${SEED_ADMIN_EMAIL}|g" \
-  -e "s|@@IMAGE_REGISTRY_REGION@@|$${IMAGE_REGISTRY_REGION}|g" \
-  -e "s|@@IMAGE_REGISTRY_ACCOUNT_ID@@|$${IMAGE_REGISTRY_ACCOUNT_ID}|g" \
-  -e "s|@@STACK_SIGNING_IDENTITY_REGEX@@|$${SIGN_IDENTITY_REGEX_SED}|g" \
-  -e "s|@@STACK_SIGNING_OIDC_ISSUER@@|$${SIGN_OIDC_ISSUER_SED}|g" \
-  /tmp/config.toml.tpl > "$${OPT_DIR}/config.toml"
-rm /tmp/config.toml.tpl
-
-# Compose env file. Provides the runtime values docker compose
-# substitutes when reading docker-compose.prod.yml. WORKER_REPLICAS is
-# safe to edit in place after first boot — `docker compose up -d`
-# scales workers without a full restart.
+# Compose env file: image selection, host-owned registry/signing
+# identity for the updater, the encryption key, and the claim token.
+# The platform rewrites its managed lines (EXO_UI_ORIGIN, worker count,
+# connector tokens, …) on instance-settings changes and preserves the
+# host-owned ones below.
 cat >"$${OPT_DIR}/.env" <<EOF
 REGISTRY=$${IMAGE_REGISTRY}
 TAG=$${IMAGE_TAG}
-# Updater image tag is tracked separately from the rest of the
-# stack. UI-driven upgrades rewrite TAG but leave UPDATER_TAG
-# untouched (the updater excludes itself from `docker compose up
-# -d`); operator bumps it out of band on release.
+# Updater image tag, tracked separately from TAG so the converge that
+# runs inside the updater never recreates its own container. In-app
+# upgrades update it via a detached helper at the tail of the upgrade;
+# edit it by hand only to pin the updater to a specific release.
 UPDATER_TAG=$${IMAGE_TAG}
 WORKER_REPLICAS=$${WORKER_REPLICAS}
+# Bring-up hostname (the EIP's nip.io name, or the configured domain).
+# The pre-setup Caddyfile serves it with a real Let's Encrypt cert so
+# the wizard loads without a certificate warning; inert after setup.
+EXO_BRINGUP_DOMAIN=$${BRINGUP_DOMAIN}
 ENCRYPTION_KEY=$${ENCRYPTION_KEY}
-# Gateway secrets supplied via env (not config.toml) so config.toml stays
-# non-secret and the non-root gateway can read it. config.Load prefers
-# these over the (blank) config.toml values.
-EXO_JWT_SECRET=$${JWT_SECRET}
-EXO_SEED_ADMIN_PASSWORD=$${SEED_ADMIN_PASSWORD}
-SLACK_APP_TOKEN=$${SLACK_APP_TOKEN}
-SLACK_BOT_TOKEN=$${SLACK_BOT_TOKEN}
-SLACK_SIGNING_SECRET=$${SLACK_SIGNING_SECRET}
+# One-time claim token for the setup wizard (hash-checked by the
+# gateway; inert after setup). Rotate with exo-reissue-claim-token.
+EXO_CLAIM_TOKEN=$${CLAIM_TOKEN}
+# Host-owned updater identity + signing policy, passed through compose
+# as env so the bundle's config.toml stays fully static.
+EXO_UPDATER_ECR_REGION=$${IMAGE_REGISTRY_REGION}
+EXO_UPDATER_ECR_REGISTRY_ID=$${IMAGE_REGISTRY_ACCOUNT_ID}
+EXO_UPDATER_STACK_SIGNING_IDENTITY_REGEX=$${SIGN_IDENTITY_REGEX}
+EXO_UPDATER_STACK_SIGNING_OIDC_ISSUER=$${SIGN_OIDC_ISSUER}
 EOF
-# config.toml and config.proxy.toml now carry no secrets (gateway secrets
-# come from .env via the compose environment), so they can be world-readable
-# for the non-root gateway + credential-proxy (UID 65532) reading them from
-# bind mounts. .env holds the secrets and stays root-only 0600 — only the
-# host's `docker compose` (which injects them as env) and the root updater
-# read it.
-chmod 0644 "$${OPT_DIR}/config.toml" "$${OPT_DIR}/config.proxy.toml"
+# config.toml and config.proxy.toml carry no secrets, so they can be
+# world-readable for the non-root gateway + credential-proxy (UID 65532)
+# reading them from bind mounts. .env holds the secrets and stays
+# root-only 0600 — only the host's `docker compose` (which injects them
+# as env) and the root updater read it.
+chmod 0644 "$${OPT_DIR}/config.toml" "$${OPT_DIR}/config.proxy.toml" "$${OPT_DIR}/Caddyfile"
 chmod 0600 "$${OPT_DIR}/.env"
 
 # ----------------------------------------------------------------------
@@ -502,3 +523,5 @@ systemctl daemon-reload
 systemctl enable ghost-agent.service
 
 echo "===> Bootstrap complete at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "     Open the bringup_url output in a browser and enter the claim"
+echo "     token from 'terraform output -raw claim_token' to complete setup."
