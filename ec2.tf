@@ -28,38 +28,29 @@ resource "aws_instance" "vm" {
   # passed in — only ARNs; cloud-init fetches values at boot via
   # the instance role.
   #
-  # gzip+base64 because the rendered script (with the embedded
-  # compose YAML, Caddyfile, and two TOML configs) exceeds the
-  # 16 KB raw user_data limit. cloud-init detects the gzip magic
-  # bytes and decompresses automatically before execution.
+  # gzip+base64 keeps headroom under the 16 KB raw user_data limit.
+  # cloud-init detects the gzip magic bytes and decompresses
+  # automatically before execution. No config files are embedded:
+  # the signed exo-stack bundle (oras-pulled at boot) carries the
+  # compose file plus static config defaults, and everything
+  # deployment-specific arrives via .env or the in-product setup
+  # wizard.
   user_data_base64 = base64gzip(templatefile("${path.module}/files/user_data.sh.tpl", {
     aws_region                   = local.aws_region
     image_registry               = var.image_registry
     image_registry_region        = local.ghost_region
     image_registry_account_id    = local.ghost_account_id
     image_tag                    = var.image_tag
-    bringup_domain               = local.bringup_domain
-    seed_admin_email             = var.seed_admin_email
     worker_replicas              = var.worker_replicas
     image_signing_identity_regex = var.image_signing_identity_regex
     image_signing_oidc_issuer    = var.image_signing_oidc_issuer
+    # Derived infra data (the EIP's nip.io name, or var.domain_name):
+    # the pre-setup Caddyfile serves this hostname with a real Let's
+    # Encrypt cert so the wizard loads without a certificate warning.
+    bringup_domain = local.bringup_domain
 
-    secret_arn_jwt            = aws_secretsmanager_secret.jwt.arn
     secret_arn_encryption_key = aws_secretsmanager_secret.encryption_key.arn
-    secret_arn_seed_password  = aws_secretsmanager_secret.seed_admin_password.arn
-    secret_arn_slack          = aws_secretsmanager_secret.slack.arn
-
-    # On-VM static artifacts. Cloud-init writes these to /opt/exo/.
-    # config.toml is the only template rendered at boot time (after
-    # secrets are fetched); the rest are inert. The docker-compose is NOT
-    # here — cloud-init oras-pulls the signed exo-stack bundle at boot
-    # (see user_data.sh.tpl).
-    caddyfile = templatefile("${path.module}/files/Caddyfile.tpl", {
-      domain      = local.bringup_domain
-      admin_email = var.seed_admin_email
-    })
-    config_toml_template = file("${path.module}/files/config.toml.tpl")
-    config_proxy_toml    = file("${path.module}/files/config.proxy.toml.tpl")
+    secret_arn_claim_token    = aws_secretsmanager_secret.claim_token.arn
   }))
 
   lifecycle {

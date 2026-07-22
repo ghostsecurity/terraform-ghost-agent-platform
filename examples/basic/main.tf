@@ -86,14 +86,11 @@ resource "aws_route_table_association" "public" {
 module "ghost_agent" {
   source = "../.."
 
-  name_prefix      = "ghost-agent"
-  image_registry   = var.image_registry
-  image_tag        = var.image_tag
-  subnet_id        = aws_subnet.public.id
-  admin_cidr       = var.admin_cidr
-  seed_admin_email = var.seed_admin_email
-  ssh_key_name     = var.ssh_key_name
-  worker_replicas  = 4
+  name_prefix     = "ghost-agent"
+  subnet_id       = aws_subnet.public.id
+  admin_cidr      = var.admin_cidr
+  ssh_key_name    = var.ssh_key_name
+  worker_replicas = 4
 }
 
 # ----------------------------------------------------------------------
@@ -105,19 +102,7 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
-variable "image_registry" {
-  type = string
-}
-
-variable "image_tag" {
-  type = string
-}
-
 variable "admin_cidr" {
-  type = string
-}
-
-variable "seed_admin_email" {
   type = string
 }
 
@@ -132,6 +117,11 @@ variable "ssh_key_name" {
 
 output "bringup_url" {
   value = module.ghost_agent.bringup_url
+}
+
+output "claim_token" {
+  value     = module.ghost_agent.claim_token
+  sensitive = true
 }
 
 output "ssh_command" {

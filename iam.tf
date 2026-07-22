@@ -66,10 +66,8 @@ resource "aws_iam_role_policy" "vm_runtime" {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
         Resource = [
-          aws_secretsmanager_secret.jwt.arn,
           aws_secretsmanager_secret.encryption_key.arn,
-          aws_secretsmanager_secret.seed_admin_password.arn,
-          aws_secretsmanager_secret.slack.arn,
+          aws_secretsmanager_secret.claim_token.arn,
         ]
       },
     ]
