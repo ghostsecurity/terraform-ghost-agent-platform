@@ -169,6 +169,18 @@ variable "data_volume_snapshot_retention_days" {
   default     = 30
 }
 
+variable "enable_ses_email" {
+  description = "Optional. When true, grant the instance role ses:SendEmail so the app can send email through Amazon SES using the instance IAM role (the in-product \"Amazon SES (instance IAM role)\" email provider) with no stored SMTP password. Off by default; deployments not using SES get no SES permission. Requires a verified SES identity and (for real recipients) SES production access, which are managed outside this module."
+  type        = bool
+  default     = false
+}
+
+variable "ses_identity_arns" {
+  description = "Optional. Restrict the ses:SendEmail grant to these SES identity ARNs (for example arn:aws:ses:us-east-1:123456789012:identity/ghost.example.com), so the instance can only send from your verified identity instead of any identity in the account. Only applies when enable_ses_email is true. Empty (the default) allows sending from any verified identity in the account."
+  type        = list(string)
+  default     = []
+}
+
 # ----------------------------------------------------------------------
 # Optional: meta
 # ----------------------------------------------------------------------
