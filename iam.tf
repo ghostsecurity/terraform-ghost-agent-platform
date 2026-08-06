@@ -74,7 +74,7 @@ resource "aws_iam_role_policy" "vm_runtime" {
       # Opt-in: lets the gateway send email through the SES v2 API as
       # this instance role, so the in-product Email settings can use
       # "Amazon SES (instance IAM role)" with no stored SMTP password.
-      # Off by default — deployments not using SES get no SES grant.
+      # Off by default - deployments not using SES get no SES grant.
       var.enable_ses_email ? [
         {
           Sid    = "SesSendEmail"
