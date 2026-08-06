@@ -307,6 +307,51 @@ See [variables.tf](variables.tf) for the full input list. Most useful overrides:
 | `enable_data_volume_snapshots` | Turn on daily DR snapshots of the data volume (with `data_volume_snapshot_retention_days`) |
 | `ghost_support_access_enabled` | Set false to remove the Ghost support role and disable cross-account SSM access |
 | `image_signing_identity_regex` | Ghost rotates the publish workflow path or pre-release tag pattern |
+| `enable_ses_email` | Send transactional email (password resets, invites) through Amazon SES using the instance IAM role - no stored SMTP password (see [Email via Amazon SES](#email-via-amazon-ses)) |
+| `ses_identity_arns` | Restrict the SES grant to specific verified identity ARNs instead of any identity in the account |
+
+## Email via Amazon SES
+
+The app supports three email providers, configured in-product under
+System -> Settings -> Email: **Resend** and **SMTP** both require entering a
+secret (an API key or SMTP password), while **Amazon SES** sends through the SES
+v2 API using the instance IAM role, with no stored secret at all. SES is the
+recommended option on AWS.
+
+Set `enable_ses_email = true` to grant the instance role `ses:SendEmail`.
+Then, in-product, choose the **Amazon SES (instance IAM role)** email provider
+and set the From address and SES region.
+
+```hcl
+module "ghost_agent" {
+  # ...
+  enable_ses_email = true
+
+  # Optional least-privilege: restrict sending to your verified identity
+  # instead of any identity in the account. Include the configuration-set
+  # ARN too if your account applies a default configuration set to sends
+  # (see below); omit that line otherwise.
+  ses_identity_arns = [
+    "arn:aws:ses:us-east-1:123456789012:identity/ghost.example.com",
+    "arn:aws:ses:us-east-1:123456789012:configuration-set/<name>",
+  ]
+}
+```
+
+Outside this module you still need a **verified SES identity** in the region
+you send from. SES identities are per-region, so the region set in-product must
+match where the identity is verified. New SES accounts start in the **sandbox**,
+which only delivers to verified addresses - request **production access** to
+reach arbitrary recipients.
+
+**Why the configuration-set ARN.** When a **default configuration set** is
+applied to sends (some accounts have one), SES authorizes `ses:SendEmail`
+against the configuration-set ARN as well as the identity, so a scoped list with
+only the identity fails with `AccessDenied` on the configuration-set resource -
+hence the second entry above. Accounts with no default configuration set can
+omit it. This only matters when you scope the grant; leaving
+`ses_identity_arns = []` (the default, Resource `*`) covers the configuration
+set automatically.
 
 ## Production recommendations
 

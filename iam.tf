@@ -40,7 +40,7 @@ resource "aws_iam_role_policy" "vm_runtime" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "EcrAuthToken"
         Effect   = "Allow"
@@ -70,7 +70,22 @@ resource "aws_iam_role_policy" "vm_runtime" {
           aws_secretsmanager_secret.claim_token.arn,
         ]
       },
-    ]
+      ],
+      # Opt-in: lets the gateway send email through the SES v2 API as
+      # this instance role, so the in-product Email settings can use
+      # "Amazon SES (instance IAM role)" with no stored SMTP password.
+      # Off by default — deployments not using SES get no SES grant.
+      var.enable_ses_email ? [
+        {
+          Sid    = "SesSendEmail"
+          Effect = "Allow"
+          Action = ["ses:SendEmail"]
+          # Scope to specific SES identity ARNs when provided (least
+          # privilege); otherwise any identity verified in the account.
+          Resource = length(var.ses_identity_arns) > 0 ? var.ses_identity_arns : ["*"]
+        },
+      ] : [],
+    )
   })
 }
 
