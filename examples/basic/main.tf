@@ -91,6 +91,15 @@ module "ghost_agent" {
   admin_cidr      = var.admin_cidr
   ssh_key_name    = var.ssh_key_name
   worker_replicas = 4
+
+  # For production, lock down the UI + /api to your corp/VPN egress by
+  # narrowing port 443. Leave port 80 (http_ingress_cidrs) at its world-open
+  # default so Let's Encrypt HTTP-01 validation can still reach the VM.
+  # https_ingress_cidrs = ["203.0.113.0/24"]
+  #
+  # Once you switch to an uploaded custom TLS cert, Let's Encrypt is no
+  # longer used and port 80 can be narrowed to match.
+  # http_ingress_cidrs = ["203.0.113.0/24"]
 }
 
 # ----------------------------------------------------------------------

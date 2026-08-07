@@ -47,8 +47,14 @@ variable "image_tag" {
 # Optional: public-facing access
 # ----------------------------------------------------------------------
 
-variable "public_ingress_cidrs" {
-  description = "Optional. CIDR blocks allowed inbound on ports 80 and 443. Default is the open internet, which fits most deployments (the app is internet-facing). Override only when the VM sits behind a CDN/WAF and ingress should be limited to that origin. Note: scoping port 80 too tightly breaks Let's Encrypt — LE does NOT publish a stable list of validator IPs; HTTP-01 challenges arrive from arbitrary global addresses. The TLS-ALPN-01 alternative (443-only) is workable but less universally supported."
+variable "http_ingress_cidrs" {
+  description = "Optional. CIDR blocks allowed inbound on port 80. Leave at the default on initial setup (open internet) - Let's Encrypt HTTP-01 validation arrives from arbitrary global addresses (LE publishes no stable list of validator IPs), so scoping this narrower breaks cert issuance and renewal. Lock down port 443 via https_ingress_cidrs instead. Exception: after switching to an uploaded custom TLS certificate, Let's Encrypt is no longer used and this can be narrowed to match https_ingress_cidrs (only the HTTP to HTTPS redirect remains on port 80)."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "https_ingress_cidrs" {
+  description = "Optional. CIDR blocks allowed inbound on port 443 (UI + /api). Default is the open internet, which fits most deployments (the app is internet-facing). Narrow this to corp/VPN egress ranges to restrict who can reach the deployment, or to a CDN/WAF origin when the VM sits behind one. Safe to scope tightly - unlike port 80, this does not affect Let's Encrypt."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
