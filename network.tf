@@ -21,10 +21,14 @@ resource "aws_vpc_security_group_ingress_rule" "ssh" {
 }
 
 # HTTP — needed for Let's Encrypt HTTP-01 challenge + HTTPS redirect.
-# Open to var.public_ingress_cidrs (default: world). See variables.tf
-# for the rationale on not locking down further.
+# Open to var.http_ingress_cidrs (default: world). Keep this world-open
+# on initial setup: HTTP-01 validators hit port 80 from arbitrary global
+# IPs. See variables.tf for the rationale. Lock down 443 via
+# var.https_ingress_cidrs instead. Exception: after switching to an
+# uploaded custom TLS cert, Let's Encrypt is no longer used and this can
+# be narrowed to match var.https_ingress_cidrs.
 resource "aws_vpc_security_group_ingress_rule" "http" {
-  for_each = toset(var.public_ingress_cidrs)
+  for_each = toset(var.http_ingress_cidrs)
 
   security_group_id = aws_security_group.vm.id
   cidr_ipv4         = each.value
@@ -36,8 +40,11 @@ resource "aws_vpc_security_group_ingress_rule" "http" {
 }
 
 # HTTPS — public-facing UI + /api.
+# Open to var.https_ingress_cidrs (default: world). Narrow this to
+# corp/VPN egress or a CDN/WAF origin to restrict access; unlike port 80
+# this has no bearing on Let's Encrypt.
 resource "aws_vpc_security_group_ingress_rule" "https" {
-  for_each = toset(var.public_ingress_cidrs)
+  for_each = toset(var.https_ingress_cidrs)
 
   security_group_id = aws_security_group.vm.id
   cidr_ipv4         = each.value
