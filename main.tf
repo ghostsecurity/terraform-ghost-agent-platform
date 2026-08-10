@@ -11,22 +11,11 @@ data "aws_subnet" "selected" {
   id = var.subnet_id
 }
 
-# Latest Amazon Linux 2023 AMI. Only consulted when var.ami_id is empty
-# (the default) — count=0 when overridden to avoid an unused API call.
-data "aws_ami" "al2023" {
-  count       = var.ami_id == "" ? 1 : 0
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-
-  filter {
-    name   = "state"
-    values = ["available"]
-  }
+# Latest standard Amazon Linux 2023 x86_64 AMI (kernel 6.1), via AWS's public
+# SSM parameter. Only consulted when var.ami_id is empty (the default).
+data "aws_ssm_parameter" "al2023" {
+  count = var.ami_id == "" ? 1 : 0
+  name  = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
 }
 
 # ----------------------------------------------------------------------
@@ -41,8 +30,8 @@ locals {
   vpc_id = data.aws_subnet.selected.vpc_id
   az     = data.aws_subnet.selected.availability_zone
 
-  # AMI: override if provided, otherwise latest AL2023.
-  ami_id = var.ami_id != "" ? var.ami_id : data.aws_ami.al2023[0].id
+  # AMI: override if provided, otherwise latest standard AL2023.
+  ami_id = var.ami_id != "" ? var.ami_id : data.aws_ssm_parameter.al2023[0].value
 
   # Parse Ghost's account ID + region out of the registry URL. Registry
   # format is `<account>.dkr.ecr.<region>.amazonaws.com` (validated in
