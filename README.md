@@ -4,7 +4,7 @@ Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an 
 
 ## What gets deployed
 
-- **1 EC2 instance** (`t3.large` by default, AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that applies UI-driven upgrades (see [Updating the deployment](#updating-the-deployment)).
+- **1 EC2 instance** (`t3.large` by default, standard AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that applies UI-driven upgrades (see [Updating the deployment](#updating-the-deployment)).
 - **1 EBS data volume** (100 GB gp3 by default) mounted at `/var/lib/exo` - holds the database, TLS material, run artifacts, and signing-cert state. Configured with `prevent_destroy = true` to guard against accidental teardown.
 - **1 Elastic IP** providing a stable public address.
 - **1 Security group** - SSH from `var.admin_cidr` only, HTTP (port 80) from `var.http_ingress_cidrs` and HTTPS (port 443) from `var.https_ingress_cidrs` (both default: world).
