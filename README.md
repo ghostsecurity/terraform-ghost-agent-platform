@@ -175,6 +175,10 @@ oidc-issuer:     https://token.actions.githubusercontent.com
 
 If a signature fails verification, cloud-init exits before `docker compose up` (and an in-app upgrade aborts before touching the stack). Cosign and the workflow signer are pinned in lockstep on both sides - Ghost's publish workflow signs with `cosign-installer@v4.1.2` (cosign v3.0.6), and the cloud-init verify uses the same version.
 
+Worker pool images are the one kind of image the instance runs that is not pulled from a registry: the in-stack updater builds them on the host from the verified `exo-worker` base of the running release plus add-ons, and they never leave the host. A pool configured with an external image reference instead (System → Instance settings → Workers, "External image") is pulled with the instance's registry login and is not signature-verified; the UI marks such pools as unverified.
+
+Those builds run on the instance's Docker daemon, so each install step runs in a build container on Docker's default bridge with the instance's outbound network, outside the credential proxy. That path would also reach the instance metadata service, and with it the instance role, so cloud-init installs `exo-block-build-metadata.service`: a one-shot unit, re-run after every Docker restart, that drops traffic from the default bridge to `169.254.169.254` (and the IPv6 metadata address when Docker has IPv6 enabled). The stack's own containers sit on compose networks and keep their metadata access. `iptables -S DOCKER-USER` on the instance shows the rule.
+
 ## Troubleshooting
 
 | Symptom | Where to look |
@@ -305,6 +309,7 @@ See [variables.tf](variables.tf) for the full input list. Most useful overrides:
 | `domain_name` + `route53_zone_id` | Real public domain instead of the nip.io fallback |
 | `instance_type` | Higher throughput; in-place change supported (~1-2 min downtime, data persists) |
 | `data_volume_size_gb` | Anticipate high workflow rate / artifact retention |
+| `root_volume_size_gb` | Docker image storage lives on the root volume. The 100 GB default covers the running and previous release plus worker pool images built on the host (each pool keeps its current and previous image, roughly 4 to 6 GB per pool, and the build cache is capped at 8 GB); builds refuse to start below 15 GB free. Pool image builds also need outbound access from the instance to Ubuntu's archives and the add-ons' download hosts, which the default security group allows |
 | `http_ingress_cidrs` | Override after initial setup if switched to custom TLS cert, otherwise leave open so Let's Encrypt HTTP-01 validation (arbitrary global IPs) can reach port 80; scoping it too tightly breaks cert renewal |
 | `https_ingress_cidrs` | Lock down port 443 to corp/VPN egress or a CDN/WAF origin (safe to scope; does not affect Let's Encrypt) |
 | `ssh_key_name` | Use SSH instead of SSM Session Manager |

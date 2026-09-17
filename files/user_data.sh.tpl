@@ -277,7 +277,59 @@ systemctl daemon-reload
 systemctl enable --now exo-docker-prune.timer
 
 # ----------------------------------------------------------------------
-# 3c. Resolve the release tag
+# 3c. Keep worker pool image builds away from IMDS
+# ----------------------------------------------------------------------
+# The in-stack updater builds worker pool images with the host daemon,
+# so each install step runs in a container on Docker's default bridge
+# (docker0) with plain NAT egress. The instance's IMDSv2 hop limit is 2
+# so the stack's own containers can take the instance role, which means
+# a build step could too, and the role can read the encryption-key
+# secret. Drop that traffic on the default bridge only: the stack's
+# services sit on compose networks (separate bridges) and keep their
+# IMDS access. Idempotent, and re-applied after every docker restart.
+
+cat >/usr/local/sbin/exo-block-build-metadata <<'EOF'
+#!/bin/sh
+set -eu
+
+guard() { # <iptables binary> <metadata address> <required: yes|no>
+  bin=$1; addr=$2; required=$3
+  if ! command -v "$bin" >/dev/null 2>&1 || ! "$bin" -S DOCKER-USER >/dev/null 2>&1; then
+    [ "$required" = no ] && return 0
+    echo "exo-block-build-metadata: $bin has no DOCKER-USER chain; is docker running?" >&2
+    exit 1
+  fi
+  "$bin" -C DOCKER-USER -i docker0 -d "$addr" -j DROP 2>/dev/null \
+    || "$bin" -I DOCKER-USER 1 -i docker0 -d "$addr" -j DROP
+}
+
+guard iptables  169.254.169.254 yes
+guard ip6tables fd00:ec2::254   no
+EOF
+chmod 0755 /usr/local/sbin/exo-block-build-metadata
+
+cat >/etc/systemd/system/exo-block-build-metadata.service <<'EOF'
+[Unit]
+Description=Block Docker's default bridge from the instance metadata service
+After=docker.service
+Requires=docker.service
+# Re-run whenever docker restarts, so the rule is never lost with the chain.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/exo-block-build-metadata
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now exo-block-build-metadata.service
+
+# ----------------------------------------------------------------------
+# 3d. Resolve the release tag
 # ----------------------------------------------------------------------
 # With no pinned image_tag, deploy the newest published release — the
 # same semantics as the in-stack updater's poller. exo-stack is
