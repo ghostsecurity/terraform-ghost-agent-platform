@@ -34,12 +34,14 @@ locals {
   # answers "gateway" with the gateway's address, so both Services get
   # fixed addresses from the low, statically allocated end of the
   # cluster's Service range. The UI Service gets one too, as the
-  # destination of the Ghost support UI session.
+  # destination of the Ghost support UI session. Three consecutive
+  # addresses from service_ip_offset, so installations sharing a cluster
+  # can each take their own.
   ip_family           = data.aws_eks_cluster.this.kubernetes_network_config[0].ip_family
   service_cidr        = data.aws_eks_cluster.this.kubernetes_network_config[0].service_ipv4_cidr
-  credential_proxy_ip = cidrhost(local.service_cidr, 12)
-  gateway_ip          = cidrhost(local.service_cidr, 13)
-  ui_ip               = cidrhost(local.service_cidr, 14)
+  credential_proxy_ip = cidrhost(local.service_cidr, var.service_ip_offset)
+  gateway_ip          = cidrhost(local.service_cidr, var.service_ip_offset + 1)
+  ui_ip               = cidrhost(local.service_cidr, var.service_ip_offset + 2)
 
   # With the VPC CNI, pods and the load balancer take addresses from the
   # VPC's ranges. Workers enroll from them, and the UI front and gateway

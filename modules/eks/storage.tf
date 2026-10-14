@@ -58,6 +58,102 @@ resource "aws_efs_backup_policy" "shared" {
 }
 
 # ----------------------------------------------------------------------
+# File system policies
+# ----------------------------------------------------------------------
+#
+# A second layer behind the security groups: those decide who can reach
+# a mount target, these decide who may mount. Both file systems refuse
+# mounts without TLS. The private one admits only the control-plane
+# nodes' IAM roles, which its storage class mounts with (the `iam` mount
+# option); the EFS driver's node agent takes the node's role from the
+# instance metadata. No client gets root access: the access points set
+# the owner of every file.
+
+data "aws_iam_policy_document" "efs_private" {
+  statement {
+    sid       = "ControlPlaneNodesMount"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"]
+    resources = [aws_efs_file_system.private.arn]
+
+    principals {
+      type        = "AWS"
+      identifiers = var.control_plane_node_role_arns
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "elasticfilesystem:AccessedViaMountTarget"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "DenyUnencryptedTransport"
+    effect    = "Deny"
+    actions   = ["*"]
+    resources = [aws_efs_file_system.private.arn]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "efs_shared" {
+  statement {
+    sid       = "NodesMount"
+    actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"]
+    resources = [aws_efs_file_system.shared.arn]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "elasticfilesystem:AccessedViaMountTarget"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "DenyUnencryptedTransport"
+    effect    = "Deny"
+    actions   = ["*"]
+    resources = [aws_efs_file_system.shared.arn]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_efs_file_system_policy" "private" {
+  file_system_id = aws_efs_file_system.private.id
+  policy         = data.aws_iam_policy_document.efs_private.json
+}
+
+resource "aws_efs_file_system_policy" "shared" {
+  file_system_id = aws_efs_file_system.shared.id
+  policy         = data.aws_iam_policy_document.efs_shared.json
+}
+
+# ----------------------------------------------------------------------
 # Mount targets and NFS access
 # ----------------------------------------------------------------------
 #
@@ -166,6 +262,9 @@ resource "kubernetes_storage_class_v1" "efs_private" {
   storage_provisioner = "efs.csi.aws.com"
   reclaim_policy      = "Retain"
   volume_binding_mode = "Immediate"
+  # Mount with the node's IAM identity, which the file system policy
+  # requires; TLS is the driver's default, stated for clarity.
+  mount_options = ["tls", "iam"]
 
   parameters = {
     provisioningMode = "efs-ap"

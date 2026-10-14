@@ -52,6 +52,16 @@ variable "control_plane_node_security_group_ids" {
   }
 }
 
+variable "control_plane_node_role_arns" {
+  description = "IAM roles of the nodes that run the gateway, credential proxy, and updater (the nodes carrying control_plane_node_security_group_ids). The private file system's policy lets only these roles mount it, and the module's storage class mounts it with the node's IAM identity."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.control_plane_node_role_arns) > 0 && alltrue([for a in var.control_plane_node_role_arns : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/", a))])
+    error_message = "control_plane_node_role_arns must list at least one IAM role ARN."
+  }
+}
+
 # ----------------------------------------------------------------------
 # Optional: image source
 # ----------------------------------------------------------------------
@@ -229,6 +239,17 @@ variable "database_snapshot_retention_days" {
 # Optional: release
 # ----------------------------------------------------------------------
 
+variable "service_ip_offset" {
+  description = "Where in the cluster's Service range the platform's three fixed Service addresses start: the credential proxy takes this offset, the gateway the next, and the UI the one after (12 gives .12, .13, and .14 of a /16 range). Each installation in a cluster needs its own three free addresses. Set it at install: a Service's address cannot change afterwards."
+  type        = number
+  default     = 12
+
+  validation {
+    condition     = var.service_ip_offset >= 11 && var.service_ip_offset <= 250 && floor(var.service_ip_offset) == var.service_ip_offset
+    error_message = "service_ip_offset must be a whole number from 11 to 250, clear of the API server (.1) and cluster DNS (.10) addresses."
+  }
+}
+
 variable "manage_release" {
   description = "Install the platform's Helm release, its Ingress, and the DNS record (the default). Set false to install the release yourself, with Helm or a GitOps tool: the module then creates everything else (namespace, secrets, storage, AWS identities, the certificate, and Ghost support access) and outputs the Helm values to install with (helm_values)."
   type        = bool
@@ -258,7 +279,7 @@ variable "extra_helm_values" {
 # ----------------------------------------------------------------------
 
 variable "name_prefix" {
-  description = "Prefix for AWS resource names (IAM roles, EFS file systems, security groups, the Secrets Manager secret) and the module's storage classes. Change it to install more than once in the same account or cluster."
+  description = "Prefix for AWS resource names (IAM roles, EFS file systems, security groups, the Secrets Manager secret) and the module's storage classes. Change it to install more than once in the same account or cluster; a second installation in a cluster also needs its own namespace and service_ip_offset."
   type        = string
   default     = "ghost-agent-eks"
 }

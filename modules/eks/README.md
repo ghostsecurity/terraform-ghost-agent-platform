@@ -8,7 +8,7 @@ For a complete test deployment, cluster included, see [examples/eks](../../examp
 
 - **A namespace** (`exo` by default) labeled for the `restricted` Pod Security Standard.
 - **The platform** as a Helm release of the `exo-helmchart` chart at `exo_version`: gateway, credential proxy, updater, MongoDB, the web UI, and the worker pools. With `manage_release = false` you install the release yourself instead; see [Installing the release yourself](#installing-the-release-yourself).
-- **2 EFS file systems** with mount targets, security groups, and daily AWS Backup backups. The private one holds the platform's keys and certificates and accepts NFS only from the control-plane nodes; the shared one holds run artifacts, public certificates, and runner identities. Both are protected with `prevent_destroy`.
+- **2 EFS file systems** with mount targets, security groups, file system policies, and daily AWS Backup backups. The private one holds the platform's keys and certificates; its security group accepts NFS only from the control-plane nodes, and its policy lets only their IAM roles mount it. The shared one holds run artifacts, public certificates, and runner identities. Both policies refuse mounts without TLS, and both file systems are protected with `prevent_destroy`.
 - **3 storage classes**: one per EFS file system (access points owned by uid/gid 65532) and a gp3 EBS class for MongoDB, all with the `Retain` reclaim policy.
 - **An Ingress** for the AWS Load Balancer Controller: an Application Load Balancer that redirects HTTP to HTTPS, uses a TLS 1.3 security policy, accepts only `ingress_cidrs`, and keeps WebSockets open for an hour.
 - **(Optional) An ACM certificate** validated through DNS, and **a Route 53 alias record** for `domain_name`, when `route53_zone_id` is set. The record, like the Ingress, only with `manage_release`.
@@ -25,7 +25,8 @@ The module does not install cluster components. The cluster needs:
 - **The EKS Pod Identity Agent add-on.**
 - **The EBS CSI driver and the EFS CSI driver add-ons**, each with an IAM role. The EFS driver creates an access point per volume.
 - **The AWS Load Balancer Controller**, and subnets tagged for it: `kubernetes.io/role/elb` on public subnets (or `kubernetes.io/role/internal-elb` on private ones for `internal_load_balancer`).
-- **Separate nodes for the control plane and the workers.** Workers never share a node with the gateway, credential proxy, updater, or database. Give the control-plane nodes a security group that no other node carries (`control_plane_node_security_group_ids`) and a label (`control_plane_node_selector`). A tainted node group for the workers (`worker_node_selector`, `worker_tolerations`) keeps everything else off them.
+- **Separate nodes for the control plane and the workers.** Workers never share a node with the gateway, credential proxy, updater, or database. Give the control-plane nodes a security group that no other node carries (`control_plane_node_security_group_ids`), an IAM role that no other node uses (`control_plane_node_role_arns`), and a label (`control_plane_node_selector`). A tainted node group for the workers (`worker_node_selector`, `worker_tolerations`) keeps everything else off them.
+- **The EFS CSI driver's node agent mounting as the node's own role.** The private file system's policy admits the control-plane node roles, and the agent takes the node's role from the instance metadata. Don't give its service account (`efs-csi-node-sa`) an AWS identity of its own; its controller's service account needs one, to create access points.
 - **Pod traffic between nodes** allowed by the node security groups: TCP 8000, 8001, 8053, 8080, 8443, 8444, and 27017, and UDP 8053. The EKS community module's recommended node rules cover the TCP ports; add UDP 8053.
 - **Image pulls from Ghost's registry**: the AWS account is on Ghost's allowed list (see [Onboarding](../../README.md#onboarding)), and the node role can pull from ECR (`AmazonEC2ContainerRegistryReadOnly`, attached to EKS managed node groups by default).
 - **Node disks** of at least 50 GiB on control-plane nodes and 100 GiB on worker nodes. See [Sizing](#sizing).
@@ -76,6 +77,7 @@ module "ghost_agent" {
   subnet_ids                            = ["subnet-0abc...", "subnet-0def..."]
   node_security_group_ids               = ["sg-0nodes..."]
   control_plane_node_security_group_ids = ["sg-0control..."]
+  control_plane_node_role_arns          = ["arn:aws:iam::123456789012:role/control-plane-nodes"]
 
   control_plane_node_selector = { "exo.ghost.security/node-role" = "system" }
   worker_node_selector        = { "exo.ghost.security/node-role" = "worker" }
@@ -122,6 +124,10 @@ The platform keeps running through a Kubernetes version upgrade of the cluster, 
 - **Keep a control-plane node in every availability zone** the node group spans. MongoDB's EBS volume belongs to one zone, so the database can only restart on a node in that zone. It takes a minute or two after moving to accept connections again, and the gateway and credential proxy wait for it.
 
 With the EKS community module, node groups follow the cluster version: change it and apply, and Terraform upgrades the control plane, then the node groups, then the add-ons. Afterwards, check that every node reports the new version (`kubectl get nodes`), that every pod in the namespace is ready (`kubectl -n exo get pods`), and that `helm test exo -n exo` passes.
+
+## More than one installation
+
+Each installation needs its own `name_prefix`, which names its AWS resources and storage classes. Installations that share a cluster also need their own `namespace`, since the platform runs one release per namespace, and their own `service_ip_offset`. The credential proxy, gateway, and UI Services take three consecutive fixed addresses from the cluster's Service range starting at that offset (12 by default, so `.12` to `.14`). Give a second installation an offset whose three addresses are free, for example 20. Set it at install: a Service's address cannot change afterwards.
 
 ## Installing the release yourself
 
@@ -289,4 +295,5 @@ See [variables.tf](variables.tf) for the full list. Most useful:
 | `ghost_support_access_enabled` | Set false to remove Ghost support access |
 | `manage_release` | Set false to install the Helm release yourself (see [Installing the release yourself](#installing-the-release-yourself)) |
 | `enable_database_snapshots`, `database_snapshot_retention_days` | Daily snapshots of the database volume |
-| `name_prefix` | AWS resource names; change it to install more than once in an account |
+| `name_prefix` | AWS resource names; change it to install more than once in an account or cluster |
+| `service_ip_offset` | Where the three fixed Service addresses start; each installation in a cluster needs its own (see [More than one installation](#more-than-one-installation)) |

@@ -151,8 +151,8 @@ module "eks" {
   name               = local.name
   kubernetes_version = var.kubernetes_version
 
-  # Fixed so the platform's pinned Service addresses (.12 and .13 of this
-  # range) are predictable.
+  # Fixed so the platform's fixed Service addresses (.12 to .14 of this
+  # range, set by the module's service_ip_offset) are predictable.
   service_ipv4_cidr = "172.20.0.0/16"
 
   endpoint_public_access                   = true
@@ -373,6 +373,7 @@ module "ghost_agent" {
   subnet_ids                            = module.vpc.private_subnets
   node_security_group_ids               = [module.eks.node_security_group_id]
   control_plane_node_security_group_ids = [aws_security_group.control_plane_nodes.id]
+  control_plane_node_role_arns          = [module.eks.eks_managed_node_groups["system"].iam_role_arn]
 
   control_plane_node_selector = local.system_node_labels
   worker_node_selector        = local.worker_node_labels

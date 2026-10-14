@@ -142,6 +142,7 @@ module "ghost_agent" {
   subnet_ids                            = ["subnet-0abc...", "subnet-0def..."]
   node_security_group_ids               = ["sg-0nodes..."]
   control_plane_node_security_group_ids = ["sg-0control..."]
+  control_plane_node_role_arns          = ["arn:aws:iam::123456789012:role/control-plane-nodes"]
 }
 ```
 

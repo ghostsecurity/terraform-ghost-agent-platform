@@ -14,6 +14,7 @@ resource "kubernetes_namespace_v1" "this" {
     }
   }
 
+  # EFS access is complete before anything in the namespace mounts it.
   # On destroy, the namespace goes before EFS: deleting a namespace waits
   # until its pods are gone, and a pod can only go once its EFS volumes
   # are unmounted, which needs the mount targets and NFS rules still there.
@@ -22,6 +23,8 @@ resource "kubernetes_namespace_v1" "this" {
     aws_efs_mount_target.shared,
     aws_vpc_security_group_ingress_rule.efs_private,
     aws_vpc_security_group_ingress_rule.efs_shared,
+    aws_efs_file_system_policy.private,
+    aws_efs_file_system_policy.shared,
   ]
 
   # Checked here rather than on the release, which may be installed
