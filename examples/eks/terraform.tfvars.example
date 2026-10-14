@@ -1,0 +1,26 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored - never commit real values.
+
+# AWS region for the cluster.
+aws_region = "us-east-1"
+
+# Where you run Terraform and kubectl from: the cluster's public API
+# endpoint accepts only these. Find the current public IP with:
+#   curl -4 https://checkip.amazonaws.com
+cluster_admin_cidrs = ["203.0.113.42/32"]
+
+# Release to install.
+exo_version = "v1.2.3"
+
+# Public hostname. With route53_zone_id set, the module requests and
+# validates an ACM certificate in that zone and creates the A record.
+domain_name     = "ghost.example.com"
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Or bring your own certificate (and manage DNS elsewhere: point
+# domain_name at the load_balancer_hostname output).
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/..."
+
+# Restrict who can reach the load balancer, for example to corp or VPN
+# egress.
+# ingress_cidrs = ["203.0.113.0/24"]

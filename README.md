@@ -2,6 +2,8 @@
 
 Terraform module that deploys the Ghost Agent Platform to a single EC2 VM in an AWS account. Provisions the VM, network, IAM, and AWS Secrets Manager entries, then bootstraps the stack via cloud-init - including cosign signature verification of the stack definition and images before any container starts.
 
+To run the platform on Amazon EKS instead, see [Deploying to Amazon EKS](#deploying-to-amazon-eks).
+
 ## What gets deployed
 
 - **1 EC2 instance** (`t3.large` by default, standard AL2023 AMI) running the full Ghost Agent Platform stack as docker-compose. Five service containers: the gateway, credential proxy, worker, UI, and an in-stack updater that applies UI-driven upgrades (see [Updating the deployment](#updating-the-deployment)).
@@ -108,6 +110,41 @@ exposed before claiming, rotate it on the host with
 Domain, TLS, worker count, and connector tokens can be changed later
 under System → Settings in the UI.
 
+## Deploying to Amazon EKS
+
+On EKS the platform runs from Ghost's Helm chart, with workers on their own node group. Choose how much of it Terraform sets up:
+
+- **New cluster:** [examples/eks](examples/eks/README.md) builds everything from scratch: a VPC, an EKS cluster with the add-ons the platform needs, a control-plane and a worker node group, the AWS Load Balancer Controller, and the platform. A starting point and test bed.
+- **Existing cluster:** [modules/eks](modules/eks/README.md) installs the platform into a cluster you run, along with its EFS storage, load balancer, certificate, DNS record, AWS identities, and Ghost support access. With `manage_release = false`, it creates all of that except the Helm release, Ingress, and DNS record, and outputs the Helm values for installing the release yourself with Helm or a GitOps tool.
+- **Helm chart only:** install the chart without Terraform, following its guide (`helm show readme oci://052783882429.dkr.ecr.us-east-1.amazonaws.com/exo-helmchart --version <version>`). Everything in AWS is then yours to provide.
+
+| | New cluster | Existing cluster | Existing cluster, own release | Helm chart only |
+| --- | --- | --- | --- | --- |
+| Cluster, node groups, add-ons, load balancer controller | Terraform | you | you | you |
+| EFS file systems and storage classes | Terraform | Terraform | Terraform | you |
+| Encryption key (backed up in Secrets Manager) | Terraform | Terraform | Terraform | you |
+| Load balancer, certificate, DNS | Terraform | Terraform | certificate from Terraform | you |
+| AWS identities (new-version checks, SES email) | Terraform | Terraform | Terraform | you |
+| Ghost support access | Terraform | Terraform | Terraform | not available |
+| Platform upgrades | `exo_version` | `exo_version` | `helm upgrade` or GitOps | `helm upgrade`, as the UI shows |
+
+A minimal module call for an existing cluster (the module README lists the cluster prerequisites and the provider setup):
+
+```hcl
+module "ghost_agent" {
+  source = "github.com/ghostsecurity/terraform-ghost-agent-platform//modules/eks?ref=<latest release tag>"
+
+  cluster_name    = "my-cluster"
+  exo_version     = "v1.2.3"
+  domain_name     = "ghost.example.com"
+  route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+  subnet_ids                            = ["subnet-0abc...", "subnet-0def..."]
+  node_security_group_ids               = ["sg-0nodes..."]
+  control_plane_node_security_group_ids = ["sg-0control..."]
+}
+```
+
 ## Ghost support access (cross-account SSM)
 
 By default this module publishes an IAM role, `<name_prefix>-ssm-support` (e.g. `ghost-agent-ssm-support`), that Ghost Security assumes to open an AWS Systems Manager Session Manager shell on the VM for support. Its trust is scoped to a single Ghost support role, so only that role can assume it. The role grants only `ssm:StartSession` on this one instance - an interactive shell, or a port-forward to reach the UI without opening any inbound ports - plus management of the operator's own sessions: no SSH key, no inbound ports, and no access to any other resource. The instance still dials out to the SSM service exactly as it does for your own `ssm_session_command`; nothing new is exposed to the internet.
@@ -117,6 +154,8 @@ terraform output ssm_support_role_arn   # the role Ghost assumes (empty if disab
 ```
 
 To turn it off, set `ghost_support_access_enabled = false`. The role is removed and Ghost has no Session Manager path to the VM.
+
+The EKS module publishes an equivalent role, scoped to port forwarding to the UI, reading the platform's Kubernetes resources and logs, and restarting its pods; see [Ghost support access](modules/eks/README.md#ghost-support-access) in its README.
 
 ## Updating the deployment
 
